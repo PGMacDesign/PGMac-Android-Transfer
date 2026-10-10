@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Local config (copy .env.example to .env)
+.env
+.env.*
+!.env.example
+.claude/
