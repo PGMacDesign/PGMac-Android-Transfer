@@ -206,6 +206,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     downloadsDir,
     defaultDeviceIp: store.defaultDeviceIp,
     adbPath: store.adbPath,
+    envDefaultDeviceIp: config.defaultDeviceIp,
   });
   volumes.onEvent(
     volumeEventHandler({

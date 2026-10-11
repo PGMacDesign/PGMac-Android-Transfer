@@ -223,6 +223,8 @@ export interface Settings {
    */
   defaultDeviceIp: string | null;
   adbPath: string | null;
+  /** Read only: `DEFAULT_DEVICE_IP`, which applies while no device IP is saved. */
+  envDefaultDeviceIp: string | null;
 }
 
 export interface AdbStatus {

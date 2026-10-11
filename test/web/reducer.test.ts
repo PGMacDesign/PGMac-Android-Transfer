@@ -19,6 +19,7 @@ const snapshot = (jobs: Job[] = []): ServerSnapshot => ({
     downloadsDir: '/Users/pat/Downloads',
     defaultDeviceIp: null,
     adbPath: null,
+    envDefaultDeviceIp: null,
   },
   mac: { home: '/Users/pat', platform: 'darwin', storage: null },
   offlineVolumes: [],
@@ -52,7 +53,13 @@ describe('applyMessage', () => {
     const s = applyMessage(initialServerState, {
       type: 'settings',
       seq: 5,
-      settings: { maxConcurrent: 1, downloadsDir: '/d', defaultDeviceIp: null, adbPath: null },
+      settings: {
+        maxConcurrent: 1,
+        downloadsDir: '/d',
+        defaultDeviceIp: null,
+        adbPath: null,
+        envDefaultDeviceIp: null,
+      },
     });
     expect(s).toBe(initialServerState);
   });
@@ -66,13 +73,25 @@ describe('applyMessage', () => {
     const s2 = applyMessage(s1, {
       type: 'settings',
       seq: 10,
-      settings: { maxConcurrent: 1, downloadsDir: '/d', defaultDeviceIp: null, adbPath: null },
+      settings: {
+        maxConcurrent: 1,
+        downloadsDir: '/d',
+        defaultDeviceIp: null,
+        adbPath: null,
+        envDefaultDeviceIp: null,
+      },
     });
     expect(s2).toBe(s1);
     const s3 = applyMessage(s1, {
       type: 'settings',
       seq: 11,
-      settings: { maxConcurrent: 1, downloadsDir: '/d', defaultDeviceIp: null, adbPath: null },
+      settings: {
+        maxConcurrent: 1,
+        downloadsDir: '/d',
+        defaultDeviceIp: null,
+        adbPath: null,
+        envDefaultDeviceIp: null,
+      },
     });
     expect(s3.snapshot?.settings.maxConcurrent).toBe(1);
     expect(s3.seq).toBe(11);
