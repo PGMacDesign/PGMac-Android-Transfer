@@ -7,6 +7,7 @@ import WebSocket from 'ws';
 import { buildApp, type App } from '../src/server/app.ts';
 import { StateStore } from '../src/server/stateStore.ts';
 import { resolveApiToken, tokenMatches, tokenUrl } from '../src/server/token.ts';
+import { decodeWireToken, encodeWireToken } from '../src/shared/token.ts';
 import { FakeRunner } from './helpers.ts';
 
 describe('resolveApiToken', () => {
@@ -41,6 +42,29 @@ describe('tokenUrl', () => {
   });
 });
 
+// RFC 7230 tchar: what a WebSocket subprotocol may contain.
+const TCHARS = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const ODD_TOKEN = 'abc/def (x) é,"q";%41';
+
+describe('wire token encoding', () => {
+  it('leaves a generated hex token unchanged', () => {
+    const t = resolveApiToken({});
+    expect(encodeWireToken(t)).toBe(t);
+  });
+
+  it('makes any configured token subprotocol-safe and round-trips it', () => {
+    for (const t of [ODD_TOKEN, 'a b', '()', '日本', 'x%y']) {
+      const wire = encodeWireToken(t);
+      expect(wire, t).toMatch(TCHARS);
+      expect(decodeWireToken(wire)).toBe(t);
+    }
+  });
+
+  it('rejects malformed percent-encoding', () => {
+    expect(decodeWireToken('%zz')).toBeUndefined();
+  });
+});
+
 const freePort = () =>
   new Promise<number>((resolve, reject) => {
     const s = net.createServer();
@@ -49,6 +73,51 @@ const freePort = () =>
       const a = s.address();
       s.close(() => (a && typeof a === 'object' ? resolve(a.port) : reject(new Error('no port'))));
     });
+  });
+
+async function startApp(token: string) {
+  const port = await freePort();
+  const home = await mkdtemp(path.join(os.tmpdir(), 'pgmac-token-'));
+  const webRoot = path.join(home, 'web');
+  await mkdir(path.join(webRoot, 'assets'), { recursive: true });
+  await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>t</title>');
+  await writeFile(path.join(webRoot, 'assets', 'app.js'), 'console.log(1)');
+  await mkdir(path.join(home, 'Docs'));
+  const app = await buildApp({
+    config: {
+      port,
+      defaultDeviceIp: null,
+      maxConcurrent: 3,
+      adbPath: '/nonexistent/adb',
+      openBrowser: false,
+      stateDir: null,
+    },
+    home,
+    webRoot,
+    store: new StateStore(path.join(home, 'state.json')),
+    runner: new FakeRunner(),
+    resolveAdb: async () => null,
+    stagingRoot: path.join(home, 'staging'),
+    reveal: () => undefined,
+    token,
+  });
+  await app.server.listen({ host: '127.0.0.1', port });
+  return { app, port, home };
+}
+
+/** Opens a real socket; resolves with the first message, or the HTTP status it was refused with. */
+const openWs = (port: number, protocols?: string[], headers: Record<string, string> = {}) =>
+  new Promise<{ status: number; protocol?: string; first?: { type: string } }>((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, protocols, { headers });
+    ws.once('unexpected-response', (_req, res) => {
+      resolve({ status: res.statusCode ?? 0 });
+      res.resume();
+    });
+    ws.once('message', (d) => {
+      resolve({ status: 101, protocol: ws.protocol, first: JSON.parse(String(d)) });
+      ws.close();
+    });
+    ws.once('error', () => resolve({ status: -1 }));
   });
 
 describe('API with a token', () => {
@@ -62,33 +131,8 @@ describe('API with a token', () => {
   const bearer = (t: string) => ({ ...H, authorization: `Bearer ${t}` });
 
   beforeAll(async () => {
-    port = await freePort();
+    ({ app, port, home } = await startApp(TOKEN));
     H = { host: `127.0.0.1:${port}` };
-    home = await mkdtemp(path.join(os.tmpdir(), 'pgmac-token-'));
-    const webRoot = path.join(home, 'web');
-    await mkdir(path.join(webRoot, 'assets'), { recursive: true });
-    await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>t</title>');
-    await writeFile(path.join(webRoot, 'assets', 'app.js'), 'console.log(1)');
-    await mkdir(path.join(home, 'Docs'));
-    app = await buildApp({
-      config: {
-        port,
-        defaultDeviceIp: null,
-        maxConcurrent: 3,
-        adbPath: '/nonexistent/adb',
-        openBrowser: false,
-        stateDir: null,
-      },
-      home,
-      webRoot,
-      store: new StateStore(path.join(home, 'state.json')),
-      runner: new FakeRunner(),
-      resolveAdb: async () => null,
-      stagingRoot: path.join(home, 'staging'),
-      reveal: () => undefined,
-      token: TOKEN,
-    });
-    await app.server.listen({ host: '127.0.0.1', port });
   });
 
   afterAll(async () => {
@@ -157,37 +201,52 @@ describe('API with a token', () => {
     expect(forgedNoToken.statusCode).toBe(403);
   });
 
-  /** Opens a real socket; resolves with the first message, or the HTTP status it was refused with. */
-  const openWs = (protocols: string[] | undefined, headers: Record<string, string> = {}) =>
-    new Promise<{ status: number; protocol?: string; first?: { type: string } }>((resolve) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, protocols, { headers });
-      ws.once('unexpected-response', (_req, res) => {
-        resolve({ status: res.statusCode ?? 0 });
-        res.resume();
-      });
-      ws.once('message', (d) => {
-        resolve({ status: 101, protocol: ws.protocol, first: JSON.parse(String(d)) });
-        ws.close();
-      });
-      ws.once('error', () => resolve({ status: -1 }));
-    });
-
   it('refuses a WebSocket upgrade without the right token', async () => {
-    expect((await openWs(undefined)).status).toBe(401);
-    expect((await openWs(['pgmac'])).status).toBe(401);
-    expect((await openWs(['pgmac', `token.${WRONG_SAME_LENGTH}`])).status).toBe(401);
-    expect((await openWs(['pgmac', `token.${WRONG_SHORT}`])).status).toBe(401);
+    expect((await openWs(port)).status).toBe(401);
+    expect((await openWs(port, ['pgmac'])).status).toBe(401);
+    expect((await openWs(port, ['pgmac', `token.${WRONG_SAME_LENGTH}`])).status).toBe(401);
+    expect((await openWs(port, ['pgmac', `token.${WRONG_SHORT}`])).status).toBe(401);
   });
 
   it('accepts the token as a second subprotocol and selects pgmac', async () => {
-    const r = await openWs(['pgmac', `token.${TOKEN}`]);
+    const r = await openWs(port, ['pgmac', `token.${TOKEN}`]);
     expect(r.status).toBe(101);
     expect(r.protocol).toBe('pgmac');
     expect(r.first?.type).toBe('snapshot');
   });
 
   it('refuses a WebSocket upgrade with a forged Host even with the right token', async () => {
-    const r = await openWs(['pgmac', `token.${TOKEN}`], { host: `evil.example:${port}` });
+    const r = await openWs(port, ['pgmac', `token.${TOKEN}`], { host: `evil.example:${port}` });
     expect(r.status).toBe(403);
+  });
+});
+
+describe('API with a configured token outside the subprotocol alphabet', () => {
+  let app: App;
+  let port: number;
+
+  beforeAll(async () => {
+    ({ app, port } = await startApp(ODD_TOKEN));
+  });
+
+  afterAll(async () => {
+    await app.shutdown();
+  });
+
+  it('accepts it encoded over HTTP and the WebSocket, and refuses it raw-mangled', async () => {
+    const H = { host: `127.0.0.1:${port}` };
+    const ok = await app.server.inject({
+      url: '/api/snapshot',
+      headers: { ...H, authorization: `Bearer ${encodeWireToken(ODD_TOKEN)}` },
+    });
+    expect(ok.statusCode).toBe(200);
+    const r = await openWs(port, ['pgmac', `token.${encodeWireToken(ODD_TOKEN)}`]);
+    expect(r.status).toBe(101);
+    expect(r.protocol).toBe('pgmac');
+    const wrong = await app.server.inject({
+      url: '/api/snapshot',
+      headers: { ...H, authorization: `Bearer ${encodeWireToken(ODD_TOKEN + 'x')}` },
+    });
+    expect(wrong.statusCode).toBe(401);
   });
 });

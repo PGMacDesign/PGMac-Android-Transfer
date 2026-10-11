@@ -2,6 +2,8 @@ export const NO_TOKEN_MESSAGE =
   'Open PGMac Android Transfer from the link printed in your terminal.';
 export const EXPIRED_TOKEN_MESSAGE = `This page's link has expired. ${NO_TOKEN_MESSAGE}`;
 
+import { encodeWireToken } from '../shared/token.ts';
+
 /** Where the token is kept for this tab, so a reload works after the fragment is gone. */
 export const TOKEN_KEY = 'pgmac.apiToken';
 
@@ -56,5 +58,5 @@ export function apiToken(): string | null {
 /** Headers for an API request; empty when the page has no token. */
 export function authHeaders(): Record<string, string> {
   const t = apiToken();
-  return t ? { authorization: `Bearer ${t}` } : {};
+  return t ? { authorization: `Bearer ${encodeWireToken(t)}` } : {};
 }

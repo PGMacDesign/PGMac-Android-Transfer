@@ -74,4 +74,13 @@ describe('api requests', () => {
     ]);
     expect((calls[1]?.headers as Record<string, string>)['content-type']).toBe('application/json');
   });
+
+  it('encode a configured token that is not header-safe', async () => {
+    const { env } = fakeEnv(`#token=${encodeURIComponent('a b/é')}`);
+    vi.stubGlobal('location', env.location);
+    vi.stubGlobal('history', env.history);
+    vi.stubGlobal('sessionStorage', env.storage);
+    const { authHeaders } = await import('../../src/web/token.ts');
+    expect(authHeaders()).toEqual({ authorization: 'Bearer a%20b%2F%C3%A9' });
+  });
 });

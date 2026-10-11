@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from 'react';
 import type { ServerMessage } from '../shared/protocol.ts';
 import { applyMessage, initialServerState, type ServerState } from './reducer.ts';
-import { apiToken } from './token.ts';
+import { encodeWireToken } from '../shared/token.ts';
+import { apiToken, authHeaders } from './token.ts';
 
 /**
  * `missing`: the page was opened without a token link. `rejected`: the server refused this
@@ -96,16 +97,17 @@ export function startStore(): void {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   runConnection({
     openSocket: (on) => {
-      const ws = new WebSocket(`${proto}://${location.host}/ws`, ['pgmac', `token.${token}`]);
+      const ws = new WebSocket(`${proto}://${location.host}/ws`, [
+        'pgmac',
+        `token.${encodeWireToken(token)}`,
+      ]);
       ws.onopen = on.open;
       ws.onmessage = (ev: MessageEvent<string>) => on.message(ev.data);
       ws.onclose = on.close;
     },
     probe: async () => {
       try {
-        const res = await fetch('/api/snapshot', {
-          headers: { authorization: `Bearer ${token}` },
-        });
+        const res = await fetch('/api/snapshot', { headers: authHeaders() });
         return res.status;
       } catch {
         return null;

@@ -6,6 +6,7 @@ import type WebSocket from 'ws';
 import { buildApp, type App } from '../src/server/app.ts';
 import { effectiveSettings, loadConfig, type Config } from '../src/server/config.ts';
 import { StateStore, defaultStateFile, openStateStore } from '../src/server/stateStore.ts';
+import { resolveApiToken } from '../src/server/token.ts';
 import type { ServerMessage } from '../src/shared/protocol.ts';
 import { RequestError } from '../src/web/api.ts';
 import { fieldForError } from '../src/web/settingsForm.ts';
@@ -65,6 +66,26 @@ describe('loadConfig', () => {
       defaultDeviceIp: '192.168.1.20',
       adbPath: '/opt/adb',
     });
+  });
+
+  it('lets a .env API_TOKEN replace one that is set but blank in the environment', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'pgmac-env-'));
+    await writeFile(path.join(dir, '.env'), 'API_TOKEN=fromfile\n');
+    const saved = process.env.API_TOKEN;
+    try {
+      for (const blank of ['', '  ']) {
+        process.env.API_TOKEN = blank;
+        loadConfig(dir);
+        expect(resolveApiToken(process.env)).toBe('fromfile');
+      }
+      // A real value in the environment still wins over .env.
+      process.env.API_TOKEN = 'fromenv';
+      loadConfig(dir);
+      expect(resolveApiToken(process.env)).toBe('fromenv');
+    } finally {
+      if (saved === undefined) delete process.env.API_TOKEN;
+      else process.env.API_TOKEN = saved;
+    }
   });
 
   it('resolves STATE_DIR to an absolute folder', () => {

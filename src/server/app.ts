@@ -23,6 +23,7 @@ import { reveal } from './reveal.ts';
 import { volumeEventHandler } from './volumeEvents.ts';
 import { StateStore } from './stateStore.ts';
 import { tokenMatches } from './token.ts';
+import { decodeWireToken } from '../shared/token.ts';
 import { AdbRunner } from './transfers/adbRunner.ts';
 import { forceStop } from './transfers/children.ts';
 import { NO_STAGING_SPACE, TransferQueue, type TransferRunner } from './transfers/queue.ts';
@@ -98,14 +99,15 @@ function needsToken(req: FastifyRequest): boolean {
 
 function presentedToken(req: FastifyRequest): string | undefined {
   const bearer = /^Bearer\s+(\S+)\s*$/i.exec(req.headers.authorization ?? '')?.[1];
-  if (bearer) return bearer;
+  if (bearer) return decodeWireToken(bearer);
   const protocols = req.headers['sec-websocket-protocol'];
   if (typeof protocols !== 'string') return undefined;
-  return protocols
+  const wire = protocols
     .split(',')
     .map((p) => p.trim())
     .find((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX))
     ?.slice(TOKEN_PROTOCOL_PREFIX.length);
+  return wire === undefined ? undefined : decodeWireToken(wire);
 }
 
 const HOST_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
