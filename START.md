@@ -6,7 +6,7 @@ You are the orchestrator for turning PGMac Android Transfer into a signed Electr
 
 The desktop app is built by pgmac-factory one ticket at a time. You do not write product code. You start the factory, keep it moving, settle what it parks, and bring the owner only the decisions that are theirs.
 
-- **Source of truth:** `docs/DESIGN.md` (architecture and Invariants) and the Linear project "PGMac Android Transfer" (P-PGM-13, https://linear.app/pgmacdesign/project/pgmac-android-transfer-4c88bda08b43), whose assessment document "Electron vs native macOS app: assessment" records the decisions: Electron, Fastify kept in a `utilityProcess`, a per-launch API token, bring-your-own adb, Developer ID signing outside the Mac App Store.
+- **Source of truth:** `docs/DESIGN.md` (architecture and Invariants) and the Linear project "PGMac Android Transfer" (P-PGM-13), whose assessment document "Electron vs native macOS app: assessment" records the decisions: Electron, Fastify kept in a `utilityProcess`, a per-launch API token, bring-your-own adb, Developer ID signing outside the Mac App Store.
 - **Builder rules:** `AGENTS.md`.
 - **Tickets:** `docs/tickets/PGM-<n>-<slug>.md`, one per factory ticket, filed with `factory/file_tickets.py`. `factory/ticket-ids.json` maps ticket ids to bead ids. Ids match Linear (PGM-360a and PGM-360b are two factory tickets for Linear's PGM-360, and so on).
 - **Factory:** the engine at `~/_Development/_AIWorkspace/pgmac-factory`, run as a dedicated instance with `factory/factory.yaml`. Its data, logs, run lock, pause flag and Beads queue are in `~/factory-data-pgmac-transfer`, and queue ids start with `pat-`. How to operate it: `~/_Development/_AIWorkspace/pgmac-factory/docs/new-project.md`, sections 7 and 8.
@@ -19,16 +19,16 @@ Read, in order: this file, `docs/DESIGN.md`, `AGENTS.md`, `factory/factory.yaml`
 - Never open, edit or merge a product PR by hand. The factory opens, reviews and merges. You change product code only by filing or editing tickets. Docs and ticket files you commit directly to `main`.
 - Commits: author `pgmacdesign@gmail.com` (check `git config user.email` first), no AI attribution lines, never an em-dash character (`scripts/verify.sh` fails on one).
 - The owner's decisions go into `docs/DESIGN.md` or the ticket files in the same change that acts on them.
-- Always run factory commands as `pnpm --dir ~/_Development/_AIWorkspace/pgmac-factory factory <command> --config /Users/patrickmacdowell/_Development/_MiscWorkspace/PGMac-Android-Transfer/factory/factory.yaml`. Without `--config` a command acts on the shared instance, which belongs to other projects.
+- Always run factory commands as `pnpm --dir ~/_Development/_AIWorkspace/pgmac-factory factory <command> --config <absolute path to this repo>/factory/factory.yaml`. Without `--config` a command acts on the shared instance, which belongs to other projects.
 - Always run `bd` as `bd -C ~/factory-data-pgmac-transfer/beads ...`, with `BEADS_DIR` and `BEADS_DB` unset. Never run `bd init`; the queue already exists.
 - Other factory instances may be running. Never stop, pause or change them. They share the usage limits, so this one may move slower while they run.
 - Linear: when a ticket is filed, its Linear issue moves to In Progress; when all of a Linear issue's factory tickets merge, mark it Done and link the PRs. Linear descriptions are full-body rewrites: re-fetch before editing, never regenerate one from memory.
-- Never delete, move or overwrite anything on the owner's NAS without their explicit permission for that action. Leave the `com.pgmacdesign.nanoprobe` app on the owner's phone alone; it belongs to another project.
+- This repo is public: everything committed is public. Keep machine paths, private links and anything about the owner's own devices out of committed files.
 
 ## 3. Preflight (every start)
 
 ```sh
-R=/Users/patrickmacdowell/_Development/_MiscWorkspace/PGMac-Android-Transfer
+R="$(git rev-parse --show-toplevel)"   # run from inside the repo
 git -C "$R" pull --ff-only
 git -C "$R" config user.email                                              # pgmacdesign@gmail.com
 "$R/scripts/verify.sh"                                                     # green on main
@@ -45,7 +45,7 @@ pnpm --dir "$F" factory status --config "$C"                               # que
 
 ```sh
 F=~/_Development/_AIWorkspace/pgmac-factory
-C=/Users/patrickmacdowell/_Development/_MiscWorkspace/PGMac-Android-Transfer/factory/factory.yaml
+C="$(git rev-parse --show-toplevel)/factory/factory.yaml"
 nohup pnpm --dir "$F" factory run --config "$C" >> ~/factory-data-pgmac-transfer/logs/run.log 2>&1 &
 pnpm --dir "$F" factory status --config "$C"       # first claim within a few minutes
 pnpm --dir "$F" factory events 20 --config "$C"
@@ -56,7 +56,7 @@ Run it in the background, then run the two checks in the same shell to confirm t
 ## 5. Filing tickets
 
 ```sh
-R=/Users/patrickmacdowell/_Development/_MiscWorkspace/PGMac-Android-Transfer
+R="$(git rev-parse --show-toplevel)"   # run from inside the repo
 python3 "$R/factory/file_tickets.py" <milestone> --dry      # checks sections, size, em-dashes, deps
 python3 "$R/factory/file_tickets.py" <milestone>            # files with the repo label, in dependency order
 ```
