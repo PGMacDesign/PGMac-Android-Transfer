@@ -198,6 +198,7 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
    - Test: drop the device and never bring it back; assert `lost` within the deadline and all queued jobs failed.
 5. **End Session leaves nothing running**: after End Session completes, no job is non-terminal, no adb child process from the session is alive, and all session timers are cleared.
    - Guarded by: End Session sets state `ending`, cancels all jobs through `finish(cancelled)`, awaits child exits with a timeout, clears timers, then disconnects.
+   - A forced stop (only after a shutdown timeout) kills every transfer process but may leave hidden `.pgmac-partial` files; originals are never touched, since a partial replaces its original only after a successful transfer.
    - Test: End Session with active transfers; assert zero live children, zero pending timers, all jobs cancelled.
 
 ### Pairing

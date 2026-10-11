@@ -23,6 +23,7 @@ import { reveal } from './reveal.ts';
 import { volumeEventHandler } from './volumeEvents.ts';
 import { StateStore } from './stateStore.ts';
 import { AdbRunner } from './transfers/adbRunner.ts';
+import { forceStop } from './transfers/children.ts';
 import { NO_STAGING_SPACE, TransferQueue, type TransferRunner } from './transfers/queue.ts';
 import { Staging } from './transfers/staging.ts';
 import type {
@@ -502,6 +503,9 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     await session.end().catch(() => undefined);
     // session.end() is a no-op without a device, but copy jobs and uploads run without one.
     await queue.cancelAll().catch(() => undefined);
+    // cancelAll gives up on a child after its timeout (one stuck on a dead share, say); kill
+    // whatever is left so shutdown never resolves with a transfer still running.
+    forceStop();
     session.dispose();
     volumes.stop();
     await server.close();
