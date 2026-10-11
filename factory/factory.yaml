@@ -1,0 +1,50 @@
+# PGMac Android Transfer's factory instance. Run every command with:
+#   pnpm --dir ~/_Development/_AIWorkspace/pgmac-factory factory <command> --config <abs path to this file>
+# Its own data dir, ticket queue, worktrees, logs, run lock and pause flag. The builder
+# login and the reviewer keys are shared with other instances, which may run at the
+# same time; they share the Claude, Codex and cubic usage limits.
+# Setup and operation: ~/_Development/_AIWorkspace/pgmac-factory/docs/new-project.md
+dataDir: ~/factory-data-pgmac-transfer
+# The ticket queue is this instance's own Beads database, <dataDir>/beads (prefix pat).
+
+repos:
+  - name: PGMac-Android-Transfer
+    slug: PGMacDesign/PGMac-Android-Transfer
+    # The personal SSH alias; plain github.com signs in as an account without access.
+    remote: git@github.com-personal:PGMacDesign/PGMac-Android-Transfer.git
+    defaultBranch: main
+    label: repo:PGMac-Android-Transfer
+    # The repo is public, so GitHub Actions minutes are free: the CI `check` job stays
+    # enabled and gates the merge on top of the local verify command.
+    requiredCheck: check
+    authorEmail: pgmacdesign@gmail.com
+    # Appended to the factory's generic review rules. At most 5 rules of 300 characters.
+    reviewRules:
+      - Breaking a rule in the "Architecture rules" section of AGENTS.md, or a law under "Invariants" in docs/DESIGN.md, is at least P1; cite the rule or the component and number. A changed invariant without a test on the violating path is P2.
+      - Any change that stops browser mode (npm start, a browser tab on 127.0.0.1) working as before, or that weakens the Host/Origin 403 check in src/server/app.ts, is at least P1.
+      - 'A ticket''s "Owner manual check" section lists GUI checks the owner runs after merge. Never report one of them as missing work or a missing test.'
+      - Electron code that enables nodeIntegration, disables contextIsolation or sandbox, or exposes more than the ticket names through the preload is P1.
+    commands:
+      - { name: verify, run: ./scripts/verify.sh, timeoutMs: 1200000 }
+
+builder:
+  # The real binary, not a terminal wrapper that may be first on PATH.
+  bin: ~/.local/bin/claude
+  model: opus
+  # Shared with every instance so no second /login is needed.
+  configDir: ~/factory-data/claude-builder
+
+reviewers:
+  required: [codex, cubic]
+  shadow: [coderabbit]
+  codex:
+    bin: /opt/homebrew/bin/codex
+    model: gpt-6-sol
+  coderabbit:
+    bin: ~/.local/bin/coderabbit
+  cubic:
+    bin: ~/.cubic/bin/cubic
+    # Shared key file, outside every repo.
+    envFile: ~/factory-data/secrets/cubic.env
+    # A cubic finding whose own text retracts it ("No issues found.") is recorded as low, not blocking.
+    ignoreSelfRetracting: true
