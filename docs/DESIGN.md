@@ -24,7 +24,7 @@ A local web app for moving files between a Mac and an Android device over WiFi, 
 
 ADB over WiFi (Android 11+ Wireless Debugging). The backend shells out to the `adb` CLI via `child_process` (no JS ADB library) because pairing and mDNS discovery live only in the CLI.
 
-`adb` resolution order: `ADB_PATH` env, `PATH`, `$ANDROID_HOME/platform-tools`, `~/Library/Android/sdk/platform-tools`. If none resolve, the UI shows an install hint (`brew install android-platform-tools`).
+`adb` resolution order: `ADB_PATH` env, `PATH`, Homebrew (`/opt/homebrew/bin`, then `/usr/local/bin`), `$ANDROID_HOME/platform-tools`, `$ANDROID_SDK_ROOT/platform-tools`, `~/Library/Android/sdk/platform-tools`, `~/Android/Sdk/platform-tools`. The Homebrew folders are checked explicitly because an app launched from the Dock or Finder gets launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which leaves them out. If none resolve, the UI shows an install hint (`brew install android-platform-tools`).
 
 ## Session flow
 
