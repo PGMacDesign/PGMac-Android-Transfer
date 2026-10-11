@@ -21,7 +21,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // Loads .env the way the server does, so an API_TOKEN set there is the one the server and
   // the printed link share.
   loadConfig(root);
-  const token = resolveApiToken(process.env);
+  let token: string;
+  try {
+    token = resolveApiToken(process.env);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
   const env = devEnv(process.env, token);
   const procs = [
     spawn(process.execPath, ['--watch', 'src/server/index.ts'], { stdio: 'inherit', env }),

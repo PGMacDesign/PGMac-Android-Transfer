@@ -70,18 +70,18 @@ describe('loadConfig', () => {
 
   it('lets a .env API_TOKEN replace one that is set but blank in the environment', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'pgmac-env-'));
-    await writeFile(path.join(dir, '.env'), 'API_TOKEN=fromfile\n');
+    await writeFile(path.join(dir, '.env'), 'API_TOKEN=token-from-dot-env\n');
     const saved = process.env.API_TOKEN;
     try {
       for (const blank of ['', '  ']) {
         process.env.API_TOKEN = blank;
         loadConfig(dir);
-        expect(resolveApiToken(process.env)).toBe('fromfile');
+        expect(resolveApiToken(process.env)).toBe('token-from-dot-env');
       }
       // A real value in the environment still wins over .env.
-      process.env.API_TOKEN = 'fromenv';
+      process.env.API_TOKEN = 'token-from-environment';
       loadConfig(dir);
-      expect(resolveApiToken(process.env)).toBe('fromenv');
+      expect(resolveApiToken(process.env)).toBe('token-from-environment');
     } finally {
       if (saved === undefined) delete process.env.API_TOKEN;
       else process.env.API_TOKEN = saved;
