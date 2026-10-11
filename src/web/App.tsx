@@ -634,8 +634,8 @@ function Workspace() {
           settings={snap.settings}
           adb={snap.adb}
           chooseFile={fileChooser()}
-          onSave={async (patch) => {
-            await api.settings(patch);
+          onSave={api.settings}
+          onSaved={() => {
             setModal(null);
             showToast('Settings saved.', 'ok');
           }}

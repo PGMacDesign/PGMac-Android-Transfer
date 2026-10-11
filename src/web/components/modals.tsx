@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type {
   AdbStatus,
   Candidate,
@@ -11,10 +11,11 @@ import type {
 import { fmtBytes, fmtCountdown, fmtDate, iconFor } from '../format.ts';
 import {
   adbPlaceholder,
+  deviceIpHint,
+  deviceIpPlaceholder,
   editField,
   initialSettingsForm,
-  saveFailed,
-  settingsPatch,
+  settingsDialog,
   type SettingsField,
 } from '../settingsForm.ts';
 import { Icon, Modal, Spinner, useNow } from './ui.tsx';
@@ -685,45 +686,38 @@ export function SettingsModal({
   adb,
   chooseFile,
   onSave,
+  onSaved,
   onCancel,
 }: {
   settings: Settings;
   adb: AdbStatus;
   /** The desktop app's native file picker; null in browser mode, which shows no button. */
   chooseFile: (() => Promise<string | null>) | null;
-  onSave: (patch: Pick<Settings, SettingsField>) => Promise<void>;
+  onSave: (patch: Pick<Settings, SettingsField>) => Promise<unknown>;
+  /** Called only if the dialog is still open when the Save succeeds. */
+  onSaved: () => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState(() => initialSettingsForm(settings));
-  const [saving, setSaving] = useState(false);
+  const [dialog] = useState(() => settingsDialog(setForm));
+  useEffect(() => {
+    dialog.reopen();
+    return () => dialog.close();
+  }, [dialog]);
+  const { saving } = form;
   const edit = (field: SettingsField, value: string) => setForm((f) => editField(f, field, value));
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      await onSave(settingsPatch(form));
-    } catch (e) {
-      setForm((f) => saveFailed(f, e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const locate = async () => {
-    try {
-      const picked = await chooseFile?.();
-      if (picked) edit('adbPath', picked);
-    } catch (e) {
-      setForm((f) => saveFailed(f, e));
-    }
+  const save = () => void dialog.save(form, onSave, onSaved);
+  const cancel = () => {
+    dialog.close();
+    onCancel();
   };
 
   const onEnter = (e: { key: string }) => {
-    if (e.key === 'Enter' && !saving) void save();
+    if (e.key === 'Enter') save();
   };
 
   return (
-    <Modal onDismiss={onCancel}>
+    <Modal onDismiss={cancel}>
       <div className="dialog padded settings" role="dialog" aria-modal="true" aria-label="Settings">
         <h2>Settings</h2>
         <label className="field">
@@ -733,14 +727,13 @@ export function SettingsModal({
             value={form.values.defaultDeviceIp}
             onChange={(e) => edit('defaultDeviceIp', e.target.value)}
             onKeyDown={onEnter}
-            placeholder="192.168.1.20"
+            placeholder={deviceIpPlaceholder(settings)}
             inputMode="decimal"
             spellCheck={false}
+            disabled={saving}
             autoFocus
           />
-          <span className="hint">
-            Connect to this device automatically when it’s found. Leave empty to choose each time.
-          </span>
+          <span className="hint">{deviceIpHint(settings)}</span>
         </label>
         <FieldError message={form.errors.defaultDeviceIp} />
         <label className="field">
@@ -753,9 +746,15 @@ export function SettingsModal({
               onKeyDown={onEnter}
               placeholder={adbPlaceholder(settings, adb)}
               spellCheck={false}
+              disabled={saving}
             />
             {chooseFile ? (
-              <button type="button" className="btn" onClick={() => void locate()}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void dialog.locate(chooseFile)}
+                disabled={saving}
+              >
                 Locate adb…
               </button>
             ) : null}
@@ -763,14 +762,15 @@ export function SettingsModal({
           <span className="hint">Leave empty to find adb automatically.</span>
         </label>
         <FieldError message={form.errors.adbPath} />
+        <FieldError message={form.pickerError ?? undefined} />
         <FieldError message={form.error ?? undefined} />
         <div className="row-end">
-          <button className="btn" onClick={onCancel}>
+          <button className="btn" onClick={cancel}>
             Cancel
           </button>
-          <button className="btn primary" onClick={() => void save()} disabled={saving}>
+          <button className="btn primary" onClick={save} disabled={saving}>
             {saving ? <Spinner /> : null}
-            Save
+            {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
       </div>

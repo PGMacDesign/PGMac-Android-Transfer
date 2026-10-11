@@ -241,6 +241,23 @@ describe('POST /api/settings', () => {
     return { home, store, resolved, messages, adbs, post, snapshot, sessionIp, settled, ws };
   }
 
+  it('exposes DEFAULT_DEVICE_IP as envDefaultDeviceIp, whatever is saved', async () => {
+    const t = await start({ defaultDeviceIp: '10.0.0.2' });
+    expect((await t.snapshot()).settings).toMatchObject({
+      defaultDeviceIp: null,
+      envDefaultDeviceIp: '10.0.0.2',
+    });
+    const r = await t.post({ defaultDeviceIp: '192.168.1.20', envDefaultDeviceIp: '1.1.1.1' });
+    expect(r.json()).toMatchObject({
+      defaultDeviceIp: '192.168.1.20',
+      envDefaultDeviceIp: '10.0.0.2',
+    });
+    await app?.shutdown();
+    app = undefined;
+    const none = await start();
+    expect((await none.snapshot()).settings.envDefaultDeviceIp).toBeNull();
+  });
+
   it('saves, applies and clears the default device IP', async () => {
     const t = await start({ defaultDeviceIp: '10.0.0.2' });
     expect(t.sessionIp()).toBe('10.0.0.2');
