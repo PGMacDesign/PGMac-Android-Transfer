@@ -26,7 +26,7 @@ vi.mock('node:fs/promises', throwingFs);
 vi.mock('fs', throwingFs);
 vi.mock('fs/promises', throwingFs);
 
-const { MAX_DRAG_OUT_PATHS, dragOutHandler, dragOutPaths } =
+const { MAX_DRAG_OUT_PATHS, dragOutHandler, dragOutPaths, fallbackDragIcon } =
   await import('../../electron/dragOut.ts');
 const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
 const electronFile = (name: string) => path.join(import.meta.dirname, '../../electron', name);
@@ -156,6 +156,25 @@ describe('drag icon', () => {
     // IHDR width and height.
     expect(png.readUInt32BE(16)).toBeGreaterThan(0);
     expect(png.readUInt32BE(20)).toBeGreaterThan(0);
+  });
+
+  it('has a built-in fallback bitmap that is non-empty and visible, with no fs access', () => {
+    const { buffer, width, height } = fallbackDragIcon();
+    expect(width).toBeGreaterThan(0);
+    expect(height).toBeGreaterThan(0);
+    expect(buffer).toHaveLength(width * height * 4);
+    const opaque = Array.from({ length: width * height }, (_, i) => buffer[i * 4 + 3]).filter(
+      (a) => a === 255,
+    );
+    expect(opaque.length).toBeGreaterThan(0);
+    expect(fsCalls).toEqual([]);
+  });
+
+  it('falls back to the built-in bitmap when the PNG loads empty', () => {
+    const main = realFs.readFileSync(electronFile('main.ts'), 'utf8');
+    expect(main).toMatch(
+      /if \(dragIcon\.isEmpty\(\)\) \{[\s\S]*?fallbackDragIcon\(\)[\s\S]*?nativeImage\.createFromBitmap\(/,
+    );
   });
 
   it('is loaded with nativeImage, and drag-out is a one-way ipcMain.on message', () => {

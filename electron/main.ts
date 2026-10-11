@@ -21,7 +21,7 @@ import {
   pickFreePort,
   serverEnv,
 } from './lib.ts';
-import { dragOutHandler } from './dragOut.ts';
+import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
 import { isExternalUrl } from './links.ts';
 import { appMenuTemplate } from './menu.ts';
 import { loadWindowState, saveWindowState, windowStatePath } from './windowState.ts';
@@ -216,8 +216,12 @@ app
   .then(() => {
     // Read once here: macOS refuses a native drag without a non-empty icon, and the drag
     // handler itself must not touch the disk.
-    const dragIcon = nativeImage.createFromPath(dragIconPath);
-    if (dragIcon.isEmpty()) console.error('Could not load the drag icon; drag-out will fail.');
+    let dragIcon = nativeImage.createFromPath(dragIconPath);
+    if (dragIcon.isEmpty()) {
+      console.error('Could not load the drag icon; using a built-in one.');
+      const { buffer, width, height } = fallbackDragIcon();
+      dragIcon = nativeImage.createFromBitmap(buffer, { width, height });
+    }
     // Synchronous, with no reply: the page is still inside its dragstart handler, and the drag
     // only starts if startDrag runs before that handler returns.
     ipcMain.on(

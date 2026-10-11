@@ -17,6 +17,26 @@ export function dragOutPaths(input: unknown): string[] {
   return out;
 }
 
+/**
+ * A plain page outline as raw BGRA pixels, for `nativeImage.createFromBitmap` when the
+ * checked-in icon can't be loaded. Built in memory: the page has already cancelled its own
+ * drag by the time main sees the message, so a native drag without a usable icon would leave
+ * the user with no drag at all.
+ */
+export function fallbackDragIcon(): { buffer: Buffer; width: number; height: number } {
+  const width = 16;
+  const height = 16;
+  const buffer = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const edge = x === 2 || x === width - 3 || y === 0 || y === height - 1;
+      const shade = edge ? 120 : 245;
+      buffer.set([shade, shade, shade, 255], (y * width + x) * 4);
+    }
+  }
+  return { buffer, width, height };
+}
+
 /** The parts of Electron's WebContents and IPC event the handler uses (fakeable in tests). */
 export interface DragOutSender {
   startDrag(item: { file: string; files: string[]; icon: unknown }): void;
