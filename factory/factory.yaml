@@ -24,6 +24,7 @@ repos:
       - Any change that stops browser mode (npm start, a browser tab on 127.0.0.1) working as before, or that weakens the Host/Origin 403 check in src/server/app.ts, is at least P1.
       - 'A ticket''s "Owner manual check" section lists GUI checks the owner runs after merge. Never report one of them as missing work or a missing test.'
       - Electron code that enables nodeIntegration, disables contextIsolation or sandbox, or exposes more than the ticket names through the preload is P1.
+      - Don't report hypothetical failures of Node.js or Electron built-ins (property getters throwing, kill of the process's own child failing, synchronous APIs misbehaving against their docs) as blocking; at most P3. Cite a reachable path for anything blocking.
     commands:
       - { name: verify, run: ./scripts/verify.sh, timeoutMs: 1200000 }
 

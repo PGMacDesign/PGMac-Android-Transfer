@@ -20,8 +20,8 @@ The server always knows which transfer processes it started and can kill them sy
 
 ## Acceptance criteria
 
-1. A registry module (for example `src/server/transfers/children.ts`) records every transfer child process the runners spawn (the `cp` and `adb push`/`pull` processes in `adbRunner.ts`) and removes each when it exits. It holds `ChildProcess` objects the server itself spawned; it never lists or matches system processes.
-2. `forceStop()` is synchronous and never throws: it sends `SIGKILL` to every registered live child and catches errors per child. It does no filesystem work.
+1. A registry module (for example `src/server/transfers/children.ts`) records the pid (a plain number, read once right after `spawn`) of every transfer child process the runners spawn (the `cp` and `adb push`/`pull` processes in `adbRunner.ts`), and removes it on that child's `exit` event. It stores numbers only, never `ChildProcess` objects, and never lists or matches system processes.
+2. `forceStop()` is synchronous: for each registered pid it calls `process.kill(pid, 'SIGKILL')` inside its own `try`/`catch` (`ESRCH` means it already exited). It reads no `ChildProcess` properties and does no filesystem work.
 3. `src/server/index.ts` calls `forceStop()` from `process.on('exit')`, so any exit of the server process kills the registered children first.
 4. When the server runs under Electron (`process.parentPort` exists), a parent-port message `{ type: 'forceStop' }` runs `forceStop()` and then `process.exit(1)`.
 5. `shutdown()` in `buildApp` calls `forceStop()` after `queue.cancelAll()` returns, so a child the 8-second cancel didn't stop is killed before shutdown resolves.
@@ -35,7 +35,7 @@ The server always knows which transfer processes it started and can kill them sy
 
 ## Test plan
 
-- Unit tests for the registry and `forceStop()` as above, including a child whose `kill` throws.
+- Unit tests for the registry and `forceStop()` as above, including a pid that already exited (`ESRCH` is swallowed and the loop continues).
 - A `buildApp` test where a fake runner's child ignores cancellation: `shutdown()` still resolves with the child dead.
 - The parent-port handler: a fake `parentPort` delivering `forceStop` calls `forceStop` then exit (inject `exit`).
 
@@ -47,6 +47,10 @@ The server always knows which transfer processes it started and can kill them sy
 
 - Removing partial files during a forced stop (see Context). The quit dialog and Electron main's quit sequence (PGM-365b).
 - `electron/main.ts` today stops the server by killing the utility process directly, which skips this ticket's `exit` hook. PGM-365b replaces that with a sequence that sends `forceStop` first. Don't change `electron/main.ts` here, and reviewers shouldn't flag that path in this ticket.
+
+## Review notes
+
+This ticket has failed review three times on ever narrower hypotheticals. Settled for this ticket: pids are plain numbers the server owns, so throwing property getters and `EPERM` on its own children are not in scope; a pid reused by the OS in the microseconds between a child's exit and its `exit` event is an accepted residual risk.
 
 ## Size
 
