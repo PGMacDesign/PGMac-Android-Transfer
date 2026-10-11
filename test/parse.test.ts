@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseBattery,
+  ADB_BLOCKED_ERROR,
+  parseConnectOutcome,
   parseConnectResult,
   parseDnsSdAddress,
   parseDnsSdBrowse,
@@ -129,6 +131,52 @@ describe('adb output parsers', () => {
     expect(parseConnectResult('connected to 192.168.1.42:37115')).toBe(true);
     expect(parseConnectResult('already connected to 192.168.1.42:37115')).toBe(true);
     expect(parseConnectResult("failed to connect to '127.0.0.1:5999': Connection refused")).toBe(
+      false,
+    );
+  });
+
+  it('explains a daemon macOS blocks from the local network, with the exact fix', () => {
+    expect(ADB_BLOCKED_ERROR).toBe(
+      'macOS is blocking adb from your local network. Quit any tools using adb, run `adb kill-server && adb start-server` in Terminal, then try again.',
+    );
+    for (const out of [
+      'Failed: Unable to start pairing client: unable to connect to 192.168.1.42:41827: No route to host',
+      'error: unable to connect to 192.168.1.42:41827: no route to host',
+    ]) {
+      expect(parsePairResult(out)).toEqual({ ok: false, error: ADB_BLOCKED_ERROR });
+    }
+    expect(
+      parseConnectOutcome('failed to connect to 192.168.1.42:37115: No route to host'),
+    ).toEqual({ ok: false, error: ADB_BLOCKED_ERROR });
+  });
+
+  it('keeps the address message for other unreachable pairing failures', () => {
+    for (const out of [
+      "failed to connect to '192.168.1.42:41827': Connection refused",
+      'error: unable to connect to 192.168.1.42:41827',
+      'error: connect to 192.168.1.42:41827 timed out',
+      "error: protocol fault (couldn't read status message)",
+    ]) {
+      expect(parsePairResult(out)).toEqual({
+        ok: false,
+        error:
+          'Could not reach the phone at that address. Check the IP and port on the pairing screen.',
+      });
+    }
+  });
+
+  it('reports a reason only for connect failures the user can act on', () => {
+    expect(parseConnectOutcome('connected to 192.168.1.42:37115')).toEqual({ ok: true });
+    expect(parseConnectOutcome('already connected to 192.168.1.42:37115')).toEqual({ ok: true });
+    for (const out of [
+      "failed to connect to '192.168.1.42:37115': Connection refused",
+      'failed to connect to 192.168.1.42:37115: Operation timed out',
+      "error: protocol fault (couldn't read status message)",
+    ]) {
+      expect(parseConnectOutcome(out)).toEqual({ ok: false, error: null });
+    }
+    // The boolean parser existing callers use is unchanged.
+    expect(parseConnectResult('failed to connect to 192.168.1.42:37115: No route to host')).toBe(
       false,
     );
   });

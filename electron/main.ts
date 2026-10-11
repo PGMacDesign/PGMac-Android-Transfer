@@ -29,7 +29,7 @@ import {
 import { resolveApiToken } from '../src/server/token.ts';
 import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
 import { isExternalUrl } from './links.ts';
-import { FileLog, redactedLines } from './log.ts';
+import { appLogsDir, FileLog, redactedLines } from './log.ts';
 import { appMenuTemplate } from './menu.ts';
 import { QuitController, quitPrompt, QUIT_BUTTON } from './quit.ts';
 import { trashHandler } from './trash.ts';
@@ -44,6 +44,11 @@ const OUTPUT_DRAIN_MS = 500;
 // Move and resize fire continuously during a drag; the final bounds are what matter.
 const SAVE_STATE_DELAY_MS = 500;
 
+try {
+  app.setAppLogsPath(appLogsDir(app.getPath('home')));
+} catch {
+  // Logging to Electron's default folder beats not starting.
+}
 // Launched from the Dock or Finder, stdout and stderr go nowhere; this file is what's left to
 // diagnose a failure afterwards.
 const log = new FileLog(() => app.getPath('logs'));

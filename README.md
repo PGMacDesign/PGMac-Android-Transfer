@@ -129,6 +129,12 @@ npm run format
 - **"Android platform tools are required"**: install them with `brew install android-platform-tools`, or set the adb path under **Settings…** (or `ADB_PATH`), then click **Check again**.
 - **Start Session finds nothing**: confirm Wireless debugging is on and the phone and Mac are on the same network. Some routers block mDNS between devices; use **Pair a new device > Pairing code** in that case.
 - **"Port 4848 is already in use"**: the app is probably already running. Open `http://127.0.0.1:4848`, or set a different `PORT`.
+- **"macOS is blocking adb from your local network. Quit any tools using adb, run `adb kill-server && adb start-server` in Terminal, then try again."**: the unsigned desktop app has no Local Network permission, and macOS applies that to the adb daemon the app starts, so every phone address fails with `No route to host`. Quit Android Studio and anything else using adb, then restart the daemon from Terminal so it runs with Terminal's permission:
+
+  ```sh
+  adb kill-server && adb start-server
+  ```
+
 - **Can't see `Android/data`**: Android 11+ blocks other apps' private folders over ADB unless the phone is rooted.
 
 ## Roadmap
