@@ -90,10 +90,17 @@ export class AdbRunner implements TransferRunner {
       }
     };
 
-    // The end of the transfer that may sit on a NAS share: the source of a push, otherwise
-    // the destination (a copy's source is the local staging folder).
-    const macPath = push ? spec.srcPath : spec.partialPath;
-    const shared = this.deps.volumes?.volumeOf(macPath) ?? null;
+    // The ends of the transfer that may sit on a NAS share: the source of a push, the
+    // destination of a pull, and both ends of a copy (a desktop-app Finder drop copies from
+    // wherever the files are).
+    const macPaths = push
+      ? [spec.srcPath]
+      : copy
+        ? [spec.srcPath, spec.partialPath]
+        : [spec.partialPath];
+    const shared = macPaths
+      .map((p) => this.deps.volumes?.volumeOf(p) ?? null)
+      .filter((m): m is Mount => m !== null);
     let volumeLost: Error | null = null;
     let forceExit: (() => void) | null = null;
     const abortForVolume = (err: Error) => {
@@ -122,11 +129,16 @@ export class AdbRunner implements TransferRunner {
         // Otherwise the partial doesn't exist until the first byte is written.
       }
       // A transfer reading from or writing to a dead share can stall without any error.
-      if (shared && !probing && !volumeLost && Date.now() - lastChange > stallMs) {
+      if (shared.length && !probing && !volumeLost && Date.now() - lastChange > stallMs) {
         probing = true;
-        const ok = await this.deps.volumes!.check(shared.mountPoint).catch(() => true);
+        let dead: Mount | null = null;
+        for (const m of shared) {
+          if (await this.deps.volumes!.check(m.mountPoint).catch(() => true)) continue;
+          dead = m;
+          break;
+        }
         probing = false;
-        if (!ok) abortForVolume(offlineError(shared.mountPoint.split('/').pop() ?? 'The share'));
+        if (dead) abortForVolume(offlineError(dead.mountPoint.split('/').pop() ?? 'The share'));
         else lastChange = Date.now();
       }
     };

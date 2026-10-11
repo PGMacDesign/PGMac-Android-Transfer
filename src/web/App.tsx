@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Candidate, ConflictDecision, PairCodeRequest, Side } from '../shared/protocol.ts';
+import type {
+  Candidate,
+  ConflictDecision,
+  PairCodeRequest,
+  PlanResponse,
+  Side,
+} from '../shared/protocol.ts';
 import { api, errorMessage } from './api.ts';
 import { AdbMissing } from './components/AdbMissing.tsx';
 import { AppBar, pillFor } from './components/AppBar.tsx';
@@ -18,7 +24,7 @@ import { TransferPanel } from './components/TransferPanel.tsx';
 import { Icon, MenuList, Spinner, Toast, useNow, type ToastData } from './components/ui.tsx';
 import { isNoTrash, noTrashConfirm } from './deletes.ts';
 import { desktopBridge } from './desktop.ts';
-import { collectDrops, isFinderDrag, type DropSource, type FinderDrop } from './finder.ts';
+import { collectDrops, isFinderDrag, type CapturedDrop, type FinderDrop } from './finder.ts';
 import { downloadRevealLabel, isActive, revealLabel } from './jobs.ts';
 import { appMenuItems, type AppMenuAction } from './menu.ts';
 import { folderLabel, joinPath } from './paths.ts';
@@ -216,17 +222,23 @@ export function App() {
     if (drops) startUploads(drops, r.uploads);
   };
 
-  const requestFinderDrop = async (to: Side, destDir: string, sources: DropSource[]) => {
+  const requestFinderDrop = async (to: Side, destDir: string, captured: CapturedDrop) => {
     try {
-      const drops = await collectDrops(sources);
-      if (!drops.length) return showToast('Nothing to copy.');
-      const plan = await api.plan({
-        from: 'finder',
-        destSide: to,
-        destDir,
-        items: drops.map((d) => d.item),
-      });
-      pendingDrops.current.set(plan.batchId, drops);
+      let plan: PlanResponse;
+      if (captured.kind === 'paths') {
+        // The desktop app copies straight from the dropped paths; nothing is uploaded.
+        plan = await api.plan({ from: 'paths', destSide: to, destDir, srcPaths: captured.paths });
+      } else {
+        const drops = await collectDrops(captured.sources);
+        if (!drops.length) return showToast('Nothing to copy.');
+        plan = await api.plan({
+          from: 'finder',
+          destSide: to,
+          destDir,
+          items: drops.map((d) => d.item),
+        });
+        pendingDrops.current.set(plan.batchId, drops);
+      }
       if (!plan.conflicts.length) return await commitBatch(plan.batchId, {});
       setModal({
         kind: 'conflict',
@@ -471,8 +483,8 @@ export function App() {
     onPathChange,
     onTransfer: (from: Side, srcPaths: string[], destDir: string) =>
       void requestTransfer(from, srcPaths, destDir),
-    onFinderDrop: (to: Side, destDir: string, sources: DropSource[]) =>
-      void requestFinderDrop(to, destDir, sources),
+    onFinderDrop: (to: Side, destDir: string, captured: CapturedDrop) =>
+      void requestFinderDrop(to, destDir, captured),
     onReveal: requestReveal,
     revealLabel: revealLabel(snap.mac.platform),
     downloadRevealLabel: downloadRevealLabel(snap.mac.platform),

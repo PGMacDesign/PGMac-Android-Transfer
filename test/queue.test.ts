@@ -1064,3 +1064,199 @@ describe('Network volumes', () => {
     expect(t.runner.runs.at(-1)!.spec.finalPath).toBe('/Volumes/NAS-1/dl/a.jpg');
   });
 });
+
+describe('Finder drops with real paths', () => {
+  const setupPaths = (volumes?: FakeVolumes) => {
+    const t = setup({ max: 5, volumes });
+    t.mac.files.set('/f', dir);
+    t.mac.files.set('/f/Album', dir);
+    t.mac.files.set('/f/x.bin', file(10));
+    t.mac.files.set('/Volumes/NAS', dir);
+    t.mac.files.set('/Volumes/NAS/big.mov', file(50));
+    const dropPaths = async (
+      srcPaths: string[],
+      destSide: 'mac' | 'android' = 'mac',
+      decisions = {},
+    ) => {
+      const plan = await t.queue.plan({
+        from: 'paths',
+        destSide,
+        destDir: destSide === 'mac' ? '/m' : '/sdcard/Download',
+        srcPaths,
+      });
+      return { plan, commit: t.queue.commit({ batchId: plan.batchId, decisions }) };
+    };
+    return { ...t, dropPaths };
+  };
+
+  it('pushes each dropped path onto the phone, like a Mac pane drag', async () => {
+    const t = setupPaths();
+    const { commit } = await t.dropPaths(['/f/Album', '/f/x.bin'], 'android');
+    expect(commit.uploads).toEqual([]);
+    expect(t.queue.jobs()).toMatchObject([
+      { direction: 'push', origin: 'pane', srcPath: '/f/Album', isDir: true, status: 'running' },
+      { direction: 'push', origin: 'pane', srcPath: '/f/x.bin', totalBytes: 10, status: 'running' },
+    ]);
+    expect(t.runner.runs.map((r) => r.spec.partialPath)).toEqual([
+      '/sdcard/Download/.Album.pgmac-partial',
+      '/sdcard/Download/.x.bin.pgmac-partial',
+    ]);
+  });
+
+  it('needs a session only for drops onto the phone', async () => {
+    const t = setupPaths();
+    t.setConnected(false);
+    t.queue.onDeviceLost();
+    await expect(t.dropPaths(['/f/x.bin'], 'android')).rejects.toMatchObject({
+      code: 'NO_SESSION',
+    });
+    await t.dropPaths(['/f/x.bin'], 'mac');
+    expect(t.byName('x.bin')).toMatchObject({ direction: 'copy', status: 'running' });
+  });
+
+  it('copies onto the Mac pane, never touching staging', async () => {
+    const t = setupPaths();
+    const { commit } = await t.dropPaths(['/f/Album']);
+    expect(t.runner.runs[0]!.spec).toMatchObject({
+      direction: 'copy',
+      srcPath: '/f/Album',
+      partialPath: '/m/.Album.pgmac-partial',
+      finalPath: '/m/Album',
+    });
+    t.runner.runs[0]!.fail('boom');
+    await flush();
+    t.queue.retry(commit.jobIds[0]!);
+    expect(t.runner.runs[1]!.spec.srcPath).toBe('/f/Album');
+    await t.queue.cancel(commit.jobIds[0]!);
+    t.queue.clearFinished();
+    await t.queue.cancelAll();
+    expect(t.staging.removed).toEqual([]);
+  });
+
+  it('asks about existing names and honours each decision', async () => {
+    const t = setupPaths();
+    t.mac.files.set('/m/x.bin', file(1));
+    const { plan } = await t.dropPaths(['/f/x.bin']);
+    expect(plan.conflicts).toMatchObject([{ name: 'x.bin', keepBothName: 'x (1).bin' }]);
+    for (const [decision, expected] of [
+      ['skip', undefined],
+      ['keep', { destName: 'x (1).bin', replace: false }],
+      ['replace', { finalPath: '/m/x.bin', replace: true }],
+    ] as const) {
+      const before = t.runner.runs.length;
+      const r = await t.dropPaths(['/f/x.bin'], 'mac', { 'x.bin': decision });
+      if (!expected) {
+        expect(r.commit.jobIds).toEqual([]);
+        continue;
+      }
+      expect(t.runner.runs).toHaveLength(before + 1);
+      const run = t.runner.runs.at(-1)!;
+      if ('destName' in expected) expect(run.spec.finalPath).toBe(`/m/${expected.destName}`);
+      else expect(run.spec.finalPath).toBe(expected.finalPath);
+      expect(run.spec.replace).toBe(expected.replace);
+      run.succeed();
+      await flush();
+    }
+  });
+
+  it('drains a copy job while the session is reconnecting, and device events leave it alone', async () => {
+    const t = setupPaths();
+    t.queue.setMaxConcurrent(1);
+    await t.push(['f0.txt']);
+    t.setConnected(false);
+    t.queue.onDeviceLost();
+    // Reconnecting: the push failed, the device-free copy starts anyway.
+    await t.dropPaths(['/f/x.bin']);
+    expect(t.byName('x.bin').status).toBe('running');
+    t.queue.onDeviceLost();
+    t.queue.onSessionLost();
+    await t.queue.cancelDeviceJobs();
+    expect(t.byName('x.bin').status).toBe('running');
+    t.runner.runs.at(-1)!.succeed();
+    await flush();
+    expect(t.byName('x.bin').status).toBe('done');
+  });
+
+  it("refuses rename and delete of a running copy's source", async () => {
+    const t = setupPaths();
+    await t.dropPaths(['/f/Album']);
+    expect(() => t.queue.assertNotBusy('mac', '/f/Album')).toThrow(/being transferred/);
+    expect(() => t.queue.assertNotBusy('mac', '/f')).toThrow(/being transferred/);
+    expect(() => t.queue.assertNotBusy('mac', '/f/x.bin')).not.toThrow();
+    t.runner.runs[0]!.succeed();
+    await flush();
+    expect(() => t.queue.assertNotBusy('mac', '/f/Album')).not.toThrow();
+  });
+
+  it('refuses to copy a folder into itself', async () => {
+    const t = setupPaths();
+    await expect(
+      t.queue.plan({ from: 'paths', destSide: 'mac', destDir: '/f/Album', srcPaths: ['/f/Album'] }),
+    ).rejects.toThrow(/into itself/);
+  });
+
+  it('waits for an offline source share, then starts over when it returns', async () => {
+    const volumes = new FakeVolumes();
+    const t = setupPaths(volumes);
+    await t.dropPaths(['/Volumes/NAS/big.mov']);
+    const first = t.runner.runs[0]!;
+    // A share dropping mid-copy tears the attempt down and waits.
+    volumes.goOffline('/Volumes/NAS');
+    t.queue.onVolumeEvent({ type: 'offline', mountPoint: '/Volumes/NAS' });
+    expect(first.cancelled).toBe(true);
+    expect(t.byName('big.mov')).toMatchObject({ status: 'queued', waitingFor: 'NAS' });
+    // A new drop from the offline share waits too, without starting.
+    t.mac.files.set('/Volumes/NAS/b.mov', file(5));
+    await t.dropPaths(['/Volumes/NAS/b.mov']);
+    expect(t.byName('b.mov')).toMatchObject({ status: 'queued', waitingFor: 'NAS' });
+    volumes.offline.clear();
+    t.queue.onVolumeEvent({ type: 'online', mountPoint: '/Volumes/NAS' });
+    await flush();
+    expect(t.byName('big.mov')).toMatchObject({ status: 'running', waitingFor: null });
+    expect(t.byName('b.mov').status).toBe('running');
+  });
+
+  it('pauses a copy whose source share stopped answering instead of failing it', async () => {
+    const volumes = new FakeVolumes();
+    const t = setupPaths(volumes);
+    await t.dropPaths(['/Volumes/NAS/big.mov']);
+    volumes.probeOk = false;
+    t.runner.runs[0]!.fail('Read error');
+    await flush();
+    await flush();
+    expect(t.byName('big.mov')).toMatchObject({ status: 'queued', waitingFor: 'NAS', error: null });
+  });
+
+  it('refuses to retry while the source share is offline, and fails at the give-up', async () => {
+    const volumes = new FakeVolumes();
+    const t = setupPaths(volumes);
+    const { commit } = await t.dropPaths(['/Volumes/NAS/big.mov']);
+    t.runner.runs[0]!.fail('boom');
+    await flush();
+    await flush();
+    volumes.goOffline('/Volumes/NAS');
+    expect(() => t.queue.retry(commit.jobIds[0]!)).toThrow(/still offline/);
+    t.mac.files.set('/Volumes/NAS/c.mov', file(5));
+    await t.dropPaths(['/Volumes/NAS/c.mov']);
+    t.queue.onVolumeEvent({ type: 'gaveUp', mountPoint: '/Volumes/NAS', name: 'NAS' });
+    expect(t.byName('c.mov')).toMatchObject({
+      status: 'failed',
+      error: 'NAS was offline for 30 minutes',
+    });
+  });
+
+  it('follows a source share remounted at a new path', async () => {
+    const volumes = new FakeVolumes();
+    const t = setupPaths(volumes);
+    await t.dropPaths(['/Volumes/NAS/big.mov']);
+    volumes.goOffline('/Volumes/NAS');
+    t.queue.onVolumeEvent({ type: 'offline', mountPoint: '/Volumes/NAS' });
+    volumes.offline.clear();
+    volumes.mounts.push('/Volumes/NAS-1');
+    t.queue.onVolumeEvent({ type: 'moved', from: '/Volumes/NAS', to: '/Volumes/NAS-1' });
+    t.queue.onVolumeEvent({ type: 'online', mountPoint: '/Volumes/NAS-1' });
+    await flush();
+    expect(t.byName('big.mov')).toMatchObject({ srcPath: '/Volumes/NAS-1/big.mov', destDir: '/m' });
+    expect(t.runner.runs.at(-1)!.spec.srcPath).toBe('/Volumes/NAS-1/big.mov');
+  });
+});

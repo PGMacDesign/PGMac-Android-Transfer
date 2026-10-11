@@ -17,7 +17,8 @@ import type {
 } from '../../shared/protocol.ts';
 import { ANDROID_ROOT, ANDROID_SHORTCUTS, MAC_SHORTCUTS } from '../../shared/protocol.ts';
 import { api, errorMessage, isAbort, RequestError } from '../api.ts';
-import { captureDropSources, isFinderDrag, type DropSource } from '../finder.ts';
+import { captureDrop, isFinderDrag, type CapturedDrop } from '../finder.ts';
+import { filePathReader } from '../desktop.ts';
 import { batteryIcon, fmtBytes, fmtDate, iconFor, LOW_BATTERY } from '../format.ts';
 import {
   activeShortcut,
@@ -70,7 +71,7 @@ export interface PaneProps {
   otherDir: string | null;
   onPathChange: (side: Side, path: string) => void;
   onTransfer: (from: Side, srcPaths: string[], destDir: string) => void;
-  onFinderDrop: (side: Side, destDir: string, sources: DropSource[]) => void;
+  onFinderDrop: (side: Side, destDir: string, drop: CapturedDrop) => void;
   /** Mac: reveal in place. Android: copy to the downloads folder, then reveal. */
   onReveal: (side: Side, paths: string[]) => void;
   /** "Show in Finder" or "Show in Files" for the Mac pane. */
@@ -479,10 +480,10 @@ export function Pane(props: PaneProps) {
     e.preventDefault();
     e.stopPropagation();
     if (fromFinder(e)) {
-      const sources = captureDropSources(e.dataTransfer);
+      const captured = captureDrop(e.dataTransfer, filePathReader());
       dragEnd();
       if (!finderOk) return props.onToast(`${notReady}.`);
-      props.onFinderDrop(side, folder ? joinPath(path, folder) : path, sources);
+      props.onFinderDrop(side, folder ? joinPath(path, folder) : path, captured);
       return;
     }
     const d = drag;

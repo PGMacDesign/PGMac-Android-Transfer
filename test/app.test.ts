@@ -291,6 +291,145 @@ describe('HTTP API', () => {
     expect(revealed.at(-1)).toEqual([path.join(home, 'Docs', 'a.txt')]);
   });
 
+  describe('Finder drops with real paths (desktop app)', () => {
+    let paths: App;
+    const H3 = { host: `127.0.0.1:${PORT + 2}` };
+    const pathsRunner = new FakeRunner();
+    const stagingRoot = () => path.join(home, 'staging3');
+    const plan = (payload: object) =>
+      paths.server.inject({ method: 'POST', url: '/api/transfers/plan', headers: H3, payload });
+    const commit = async (batchId: string, decisions = {}) =>
+      (
+        await paths.server.inject({
+          method: 'POST',
+          url: '/api/transfers/commit',
+          headers: H3,
+          payload: { batchId, decisions },
+        })
+      ).json() as { jobIds: string[]; uploads: unknown[] };
+    const staged = () => readdir(stagingRoot()).catch(() => []);
+
+    beforeAll(async () => {
+      await mkdir(path.join(home, 'Drop', 'Album', 'empty'), { recursive: true });
+      await writeFile(path.join(home, 'Drop', 'Album', '.DS_Store'), 'meta');
+      await writeFile(path.join(home, 'Drop', 'note.txt'), 'note');
+      await mkdir(path.join(home, 'Out'));
+      await writeFile(path.join(home, 'Out', 'note.txt'), 'old');
+      paths = await buildApp({
+        config: {
+          port: PORT + 2,
+          defaultDeviceIp: null,
+          maxConcurrent: 3,
+          adbPath: '/nonexistent/adb',
+          openBrowser: false,
+        },
+        home,
+        store: new StateStore(path.join(home, 'state3.json')),
+        runner: pathsRunner,
+        resolveAdb: async () => null,
+        stagingRoot: stagingRoot(),
+        reveal: () => undefined,
+      });
+    });
+    afterAll(() => paths.shutdown());
+
+    it('copies a dropped folder from where it is, without a session or staging', async () => {
+      const album = path.join(home, 'Drop', 'Album');
+      const p = await plan({
+        from: 'paths',
+        destSide: 'mac',
+        destDir: path.join(home, 'Out'),
+        srcPaths: [album],
+      });
+      expect(p.statusCode).toBe(200);
+      expect(p.json().conflicts).toEqual([]);
+      const { jobIds, uploads } = await commit(p.json().batchId);
+      expect(uploads).toEqual([]);
+      const run = pathsRunner.runs.at(-1)!;
+      expect(run.spec).toMatchObject({
+        direction: 'copy',
+        srcPath: album,
+        isDir: true,
+        partialPath: path.join(home, 'Out', '.Album.pgmac-partial'),
+        finalPath: path.join(home, 'Out', 'Album'),
+      });
+      const job = paths.queue.jobs().find((j) => j.id === jobIds[0])!;
+      expect(job).toMatchObject({ status: 'running', origin: 'pane', srcPath: album });
+
+      // The source is busy while the copy runs.
+      const del = await paths.server.inject({
+        method: 'POST',
+        url: '/api/fs/mac/delete',
+        headers: H3,
+        payload: { paths: [album] },
+      });
+      expect(del.json().code).toBe('BUSY_PATH');
+
+      // A retry reads the source path again.
+      run.fail('boom');
+      await new Promise((r) => setImmediate(r));
+      await paths.server.inject({
+        method: 'POST',
+        url: `/api/transfers/${jobIds[0]}/retry`,
+        headers: H3,
+      });
+      expect(pathsRunner.runs.at(-1)!.spec.srcPath).toBe(album);
+      pathsRunner.runs.at(-1)!.succeed();
+      await new Promise((r) => setImmediate(r));
+      expect(await staged()).toEqual([]);
+    });
+
+    it('asks about a name that already exists, and replaces when told to', async () => {
+      const note = path.join(home, 'Drop', 'note.txt');
+      const p = await plan({
+        from: 'paths',
+        destSide: 'mac',
+        destDir: path.join(home, 'Out'),
+        srcPaths: [note],
+      });
+      expect(p.json().conflicts.map((c: { name: string }) => c.name)).toEqual(['note.txt']);
+      await commit(p.json().batchId, { 'note.txt': 'replace' });
+      expect(pathsRunner.runs.at(-1)!.spec).toMatchObject({ srcPath: note, replace: true });
+      pathsRunner.runs.at(-1)!.succeed();
+      expect(await staged()).toEqual([]);
+    });
+
+    it('needs a session for drops onto the phone', async () => {
+      const p = await plan({
+        from: 'paths',
+        destSide: 'android',
+        destDir: '/sdcard',
+        srcPaths: [path.join(home, 'Drop', 'note.txt')],
+      });
+      expect(p.json().code).toBe('NO_SESSION');
+    });
+
+    it('validates the dropped paths', async () => {
+      for (const srcPaths of [['relative.txt'], ['/a\0b'], 'nope']) {
+        const p = await plan({ from: 'paths', destSide: 'mac', destDir: home, srcPaths });
+        expect(p.statusCode, JSON.stringify(srcPaths)).toBe(400);
+      }
+      const missing = await plan({
+        from: 'paths',
+        destSide: 'mac',
+        destDir: home,
+        srcPaths: [path.join(home, 'Drop', 'gone.txt')],
+      });
+      expect(missing.statusCode).toBe(404);
+    });
+
+    it('refuses to copy a folder into itself', async () => {
+      const p = await plan({
+        from: 'paths',
+        destSide: 'mac',
+        destDir: path.join(home, 'Drop', 'Album', 'empty'),
+        srcPaths: [path.join(home, 'Drop', 'Album')],
+      });
+      expect(p.statusCode).toBe(400);
+      expect(p.json().error).toMatch(/into itself/);
+    });
+  });
+
   it('cancels copy jobs and uploads on quit even without a device', async () => {
     const other = await buildApp({
       config: {

@@ -114,6 +114,15 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 - Drops onto the Mac pane work with or without a device session.
 - Staged files are deleted when their job is done, cancelled, or cleared, at End Session, and at startup.
 
+#### Real-path drops in the desktop app
+
+- The desktop app's preload exposes `pgmacDesktop.getPathForFile(file)` (Electron's `webUtils.getPathForFile`, nothing else from `webUtils`). Inside the drop event the page reads each dropped top-level item's real path (a dropped folder is one path; its entries aren't walked) and plans `{ from: 'paths', destSide, destDir, srcPaths }`.
+- These jobs run like a drag from the Mac pane: one job per path, a push onto the phone pane, or a copy (`cp -R` into the partial name, then rename) onto the Mac pane, which needs no session. Nothing is uploaded or staged, there is no "Reading from Finder" phase and no free-space check for staging. Conflicts, partial files, progress, cancel, retry (which reads the source path again) and the concurrency limit are the pane rules. The jobs' origin is `pane`.
+- A copy job's source and destination are both Mac paths, so it waits for whichever of them is on an offline network volume, and follows either one when its share is remounted elsewhere.
+- `.DS_Store` and `._*` files are copied like any other file, as in a Mac pane drag; only uploads leave them out.
+- A copy into the dropped folder itself (or one of its subfolders) is refused at planning.
+- If any dropped item has no path (`getPathForFile` returns `""`, as for items dragged from some apps), the whole drop uses the upload path above. Browser mode has no bridge and always uploads.
+
 ### Show in Finder / Show in Files
 
 - Android items (labelled "Download & Show in Finder", since nothing is shown until the copy finishes): the selection is copied through the normal queue (with conflict handling) into the downloads folder, then the file manager opens with the copied items selected once every job in that batch has finished.
@@ -127,7 +136,7 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 - A dropped SMB/NFS mount often hangs file calls instead of failing them. Mac file operations on network mounts (from the mount table: smbfs, afpfs, nfs, webdav, cifs, sshfs and similar) get timeouts, and the libuv threadpool is enlarged (`threadpool.ts`, the entry point's first import, which runs before the pool's first use) so a few hung calls can't starve the app.
 - The first timeout or network error (`EIO`, `ENOTCONN`, `ESTALE`, `ETIMEDOUT`, `EHOSTDOWN`, ...) on a volume marks it offline. Calls on an offline volume fail immediately. A probe in a separate, killable process runs every 5 s until the volume answers again.
 - The Mac pane shows "<name> is offline, waiting for it to reconnect" and refreshes when it returns.
-- Jobs whose Mac-side path is on an offline volume pause ("Waiting for <name>") instead of failing; a running attempt is torn down first. When the volume returns they restart from the beginning of the item. After 30 minutes offline they fail (retryable).
+- Jobs with a Mac-side path (the source of a push, the destination of a pull, either end of a copy) on an offline volume pause ("Waiting for <name>") instead of failing; a running attempt is torn down first. When the volume returns they restart from the beginning of the item. After 30 minutes offline they fail (retryable).
 - A volume is identified by its mount source (e.g. `//nas.local/Share`, user part ignored). If it comes back at a different mount point (`/Volumes/Share-1`), paused jobs and open panes follow it.
 - If a share drops in the middle of a folder Replace, the original (parked under its hidden backup name) is moved back when the share returns, before paused transfers restart.
 - Retrying a job whose share is still offline is refused; it can't be left waiting with no deadline.
@@ -204,6 +213,8 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 
 ### Finder uploads and staging
 
+These apply to browser-mode drops. Real-path drops in the desktop app never create anything under the staging root.
+
 1. **Uploading holds no slot**: a job in `uploading` never counts toward the concurrency limit and becomes `queued` only after the browser marks it complete and the staged copy is measured.
    - Guarded by: `canStart(entry)` returns false for `uploading`; only `completeUpload` moves it to `queued`.
    - Test: drop 5 items at limit 1 and leave them uploading; assert none is running and pane jobs still start.
@@ -222,7 +233,7 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 
 ### Job eligibility
 
-1. **One predicate decides who may start**: a device job (push/pull) starts only while the device is connected; a copy job starts with or without a session; no job starts while its Mac-side volume is offline; an uploading job never starts.
+1. **One predicate decides who may start**: a device job (push/pull) starts only while the device is connected; a copy job starts with or without a session; no job starts while a volume holding one of its Mac-side paths (both ends of a copy) is offline; an uploading job never starts.
    - Guarded by: `canStart(entry)`, used by `pump()` and nowhere else.
    - Test: one case per clause, including a copy job draining while the session is `reconnecting`.
 2. **Device events leave copy jobs alone**: `onDeviceLost` and `onSessionLost` touch only push/pull jobs, and not a pull whose bytes are already on the Mac (adb exited 0), and so does starting a new session from `lost` (Start Session, pairing, Start new session). Only an explicit End Session cancels everything.

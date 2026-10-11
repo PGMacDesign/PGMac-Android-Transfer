@@ -308,6 +308,15 @@ export async function buildApp(opts: AppOptions): Promise<App> {
         items: b.items as FinderItem[],
       });
     }
+    if (b.from === 'paths') {
+      if (!Array.isArray(b.srcPaths)) throw invalid('srcPaths must be a list.');
+      return queue.plan({
+        from: 'paths',
+        destSide: sideParam(b.destSide),
+        destDir: normalizeAbs(b.destDir),
+        srcPaths: b.srcPaths.map(normalizeAbs),
+      });
+    }
     const from = sideParam(b.from);
     if (!Array.isArray(b.srcPaths)) throw invalid('srcPaths must be a list.');
     return queue.plan({
