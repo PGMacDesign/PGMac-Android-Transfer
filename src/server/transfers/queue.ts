@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 import { HttpError, busy, invalid, noSession, notFound } from '../errors.ts';
 import { baseName, joinPosix, pathsOverlap, validateName } from '../fs/paths.ts';
@@ -159,12 +158,14 @@ export function planDirection(
 }
 
 /**
- * Whether the Mac volume holding `p` tells names apart by case. Looking `p` up with one
- * component's case swapped finds the same file on a case-insensitive volume (the macOS
- * default) and nothing, or another file, on a case-sensitive one. Anything that can't be
- * probed counts as case-insensitive, the default.
+ * Whether the volume holding `p` tells names apart by case, probed through `fs` so a dead
+ * network share fails through its volume guard instead of hanging. The deepest name with
+ * letters is looked up with its case swapped: a case-insensitive volume (the macOS default)
+ * finds the same entry, a case-sensitive one finds nothing or a separate entry of that exact
+ * name (an alias that a stat alone can't tell apart). Offline errors propagate; anything
+ * else that can't be probed counts as case-insensitive, the default.
  */
-export async function probeCaseSensitive(p: string): Promise<boolean> {
+export async function probeCaseSensitive(fs: SideFs, p: string): Promise<boolean> {
   const parts = p.split('/');
   for (let i = parts.length - 1; i > 0; i--) {
     const name = parts[i]!;
@@ -172,10 +173,11 @@ export async function probeCaseSensitive(p: string): Promise<boolean> {
     if (swapped === name) continue;
     const variant = [...parts.slice(0, i), swapped, ...parts.slice(i + 1)].join('/');
     try {
-      const a = await fsStat(p, { bigint: true });
-      const b = await fsStat(variant, { bigint: true }).catch(() => null);
-      return !b || a.dev !== b.dev || a.ino !== b.ino;
-    } catch {
+      if (!(await fs.stat(variant))) return true;
+      const parent = parts.slice(0, i).join('/') || '/';
+      return (await fs.list(parent)).some((e) => e.name === swapped);
+    } catch (err) {
+      if (isOfflineError(err)) throw err;
       return false;
     }
   }
@@ -336,7 +338,10 @@ export class TransferQueue {
     };
     if (inside(false)) return true;
     // Only a match that needs case folding depends on the volume, so only it is probed.
-    return inside(true) && !(await (this.deps.caseSensitive ?? probeCaseSensitive)(src));
+    if (!inside(true)) return false;
+    const caseSensitive =
+      this.deps.caseSensitive ?? ((p: string) => probeCaseSensitive(this.deps.fs.mac, p));
+    return !(await caseSensitive(src));
   }
 
   private async finishPlan(
