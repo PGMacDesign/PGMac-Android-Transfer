@@ -26,20 +26,52 @@ export function pickFreePort(host = SERVER_HOST): Promise<number> {
   });
 }
 
-/** The server's environment: the parent's, plus the port, no browser, and the wide libuv pool. */
-export function serverEnv(parent: NodeJS.ProcessEnv, port: number): Record<string, string> {
+/**
+ * The server's environment: the parent's, plus the port, no browser, the wide libuv pool, and
+ * the app's own state folder (macOS's Application Support for the app, not the browser mode's).
+ */
+export function serverEnv(
+  parent: NodeJS.ProcessEnv,
+  port: number,
+  stateDir: string,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(parent)) {
     if (value !== undefined) env[key] = value;
   }
   env.PORT = String(port);
   env.OPEN_BROWSER = '0';
+  env.STATE_DIR = stateDir;
   // libuv reads the pool size once, on first use, which in a utilityProcess can come before
   // the server's own threadpool import runs.
   const poolSize = parent.UV_THREADPOOL_SIZE ?? process.env.UV_THREADPOOL_SIZE;
   if (!poolSize) throw new Error('UV_THREADPOOL_SIZE is not set');
   env.UV_THREADPOOL_SIZE = poolSize;
   return env;
+}
+
+/** The parts of Electron's open-dialog result the file chooser reads. */
+export interface OpenDialogResult {
+  canceled: boolean;
+  filePaths: string[];
+}
+
+/**
+ * The `ipcMain.handle('choose-file')` handler: a native picker for one file, resolving to its
+ * path or null. Only the app's own window may ask. The path is not checked here; whoever uses
+ * it (the server, for an adb path) validates it.
+ */
+export function chooseFileHandler<W extends { webContents: unknown }>(opts: {
+  /** The app window, or null while there is none. */
+  appWindow: () => W | null;
+  showOpenDialog: (win: W, options: { properties: ['openFile'] }) => Promise<OpenDialogResult>;
+}): (event: { sender: unknown }) => Promise<string | null> {
+  return async (event) => {
+    const win = opts.appWindow();
+    if (!win || event.sender !== win.webContents) return null;
+    const result = await opts.showOpenDialog(win, { properties: ['openFile'] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  };
 }
 
 export function isListeningMessage(message: unknown, port: number): message is ListeningMessage {

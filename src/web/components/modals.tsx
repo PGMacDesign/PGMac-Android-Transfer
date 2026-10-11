@@ -1,12 +1,22 @@
 import { useState, type ReactNode } from 'react';
 import type {
+  AdbStatus,
   Candidate,
   Conflict,
   ConflictDecision,
   PairCodeRequest,
   PairingSnapshot,
+  Settings,
 } from '../../shared/protocol.ts';
 import { fmtBytes, fmtCountdown, fmtDate, iconFor } from '../format.ts';
+import {
+  adbPlaceholder,
+  editField,
+  initialSettingsForm,
+  saveFailed,
+  settingsPatch,
+  type SettingsField,
+} from '../settingsForm.ts';
 import { Icon, Modal, Spinner, useNow } from './ui.tsx';
 
 // ------------------------------------------------------------ searching
@@ -665,5 +675,115 @@ export function DownloadsModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ------------------------------------------------------------ settings
+
+export function SettingsModal({
+  settings,
+  adb,
+  chooseFile,
+  onSave,
+  onCancel,
+}: {
+  settings: Settings;
+  adb: AdbStatus;
+  /** The desktop app's native file picker; null in browser mode, which shows no button. */
+  chooseFile: (() => Promise<string | null>) | null;
+  onSave: (patch: Pick<Settings, SettingsField>) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [form, setForm] = useState(() => initialSettingsForm(settings));
+  const [saving, setSaving] = useState(false);
+  const edit = (field: SettingsField, value: string) => setForm((f) => editField(f, field, value));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSave(settingsPatch(form));
+    } catch (e) {
+      setForm((f) => saveFailed(f, e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const locate = async () => {
+    try {
+      const picked = await chooseFile?.();
+      if (picked) edit('adbPath', picked);
+    } catch (e) {
+      setForm((f) => saveFailed(f, e));
+    }
+  };
+
+  const onEnter = (e: { key: string }) => {
+    if (e.key === 'Enter' && !saving) void save();
+  };
+
+  return (
+    <Modal onDismiss={onCancel}>
+      <div className="dialog padded settings" role="dialog" aria-modal="true" aria-label="Settings">
+        <h2>Settings</h2>
+        <label className="field">
+          Default device IP
+          <input
+            className={form.errors.defaultDeviceIp ? 'invalid' : ''}
+            value={form.values.defaultDeviceIp}
+            onChange={(e) => edit('defaultDeviceIp', e.target.value)}
+            onKeyDown={onEnter}
+            placeholder="192.168.1.20"
+            inputMode="decimal"
+            spellCheck={false}
+            autoFocus
+          />
+          <span className="hint">
+            Connect to this device automatically when it’s found. Leave empty to choose each time.
+          </span>
+        </label>
+        <FieldError message={form.errors.defaultDeviceIp} />
+        <label className="field">
+          adb path
+          <span className="field-row">
+            <input
+              className={form.errors.adbPath ? 'invalid' : ''}
+              value={form.values.adbPath}
+              onChange={(e) => edit('adbPath', e.target.value)}
+              onKeyDown={onEnter}
+              placeholder={adbPlaceholder(settings, adb)}
+              spellCheck={false}
+            />
+            {chooseFile ? (
+              <button type="button" className="btn" onClick={() => void locate()}>
+                Locate adb…
+              </button>
+            ) : null}
+          </span>
+          <span className="hint">Leave empty to find adb automatically.</span>
+        </label>
+        <FieldError message={form.errors.adbPath} />
+        <FieldError message={form.error ?? undefined} />
+        <div className="row-end">
+          <button className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="btn primary" onClick={() => void save()} disabled={saving}>
+            {saving ? <Spinner /> : null}
+            Save
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function FieldError({ message }: { message: string | undefined }) {
+  if (!message) return null;
+  return (
+    <div className="alert" role="alert">
+      <Icon name="error" fill />
+      <span>{message}</span>
+    </div>
   );
 }

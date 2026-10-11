@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   nativeImage,
@@ -15,6 +16,7 @@ import {
   SERVER_HOST,
   START_FAILED_HEADING,
   STOPPED_HEADING,
+  chooseFileHandler,
   dataUrl,
   failurePage,
   isListeningMessage,
@@ -114,7 +116,7 @@ async function startServer(): Promise<void> {
   const tail = new OutputTail();
   // Forked exactly once per launch. A server that dies is reported, never silently restarted.
   const child = utilityProcess.fork(serverEntry, [], {
-    env: serverEnv(process.env, port),
+    env: serverEnv(process.env, port, app.getPath('userData')),
     stdio: 'pipe',
     serviceName: 'PGMac Android Transfer server',
   });
@@ -230,6 +232,13 @@ app
         appContents: () => mainWindow?.webContents ?? null,
         icon: dragIcon,
         log: (message, err) => console.error(message, err),
+      }),
+    );
+    ipcMain.handle(
+      'choose-file',
+      chooseFileHandler({
+        appWindow: () => mainWindow,
+        showOpenDialog: (win, options) => dialog.showOpenDialog(win, options),
       }),
     );
     Menu.setApplicationMenu(

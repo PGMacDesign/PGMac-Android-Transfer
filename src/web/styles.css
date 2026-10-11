@@ -1877,6 +1877,21 @@ a {
 .downloads {
   width: 480px;
 }
+.settings {
+  width: 520px;
+}
+.field .hint {
+  font-weight: 400;
+  line-height: 1.45;
+}
+.field-row {
+  display: flex;
+  gap: 8px;
+}
+.field-row input {
+  flex: 1;
+  min-width: 0;
+}
 .confirm .body {
   color: var(--muted);
   margin-top: 4px;

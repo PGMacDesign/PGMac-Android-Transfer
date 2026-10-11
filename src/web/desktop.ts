@@ -11,6 +11,8 @@ export interface PgmacDesktop {
   getPathForFile(file: File): string;
   /** Starts a native drag of these Mac paths out of the window. Must run inside `dragstart`. */
   startDrag(paths: string[]): void;
+  /** Opens a native picker for one file: its path, or null when cancelled. */
+  chooseFile(): Promise<string | null>;
 }
 
 declare global {
@@ -33,6 +35,13 @@ export function filePathReader(): ((file: File) => string) | null {
   const bridge = desktopBridge();
   if (typeof bridge?.getPathForFile !== 'function') return null;
   return (file) => bridge.getPathForFile(file);
+}
+
+/** Opens the native file picker, or null in browser mode, which has no way to get a real path. */
+export function fileChooser(): (() => Promise<string | null>) | null {
+  const bridge = desktopBridge();
+  if (typeof bridge?.chooseFile !== 'function') return null;
+  return () => bridge.chooseFile();
 }
 
 /** What an in-app drag between the panes carries. */

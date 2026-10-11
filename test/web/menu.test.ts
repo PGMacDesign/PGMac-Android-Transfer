@@ -51,4 +51,11 @@ describe('appMenuItems', () => {
     expect(byId('pair')?.disabled).toBe(true);
     expect(byId('downloads')?.disabled).toBe(false);
   });
+
+  it('offers Settings, opening the settings dialog, just above Downloads folder', () => {
+    const list = items();
+    const at = list.findIndex((i) => i.id === 'settings');
+    expect(list[at]).toMatchObject({ label: 'Settings…', icon: 'settings', disabled: false });
+    expect(list[at + 1]?.id).toBe('downloads');
+  });
 });

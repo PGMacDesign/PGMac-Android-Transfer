@@ -16,11 +16,13 @@ function loadPreload() {
     },
   );
   const ipcRenderer = new Proxy(
-    { send: vi.fn() },
+    { send: vi.fn(), invoke: vi.fn(async () => '/opt/homebrew/bin/adb') },
     {
       get(target, key) {
-        if (key !== 'send') throw new Error(`ipcRenderer.${String(key)} was used`);
-        return target.send;
+        if (key !== 'send' && key !== 'invoke') {
+          throw new Error(`ipcRenderer.${String(key)} was used`);
+        }
+        return target[key];
       },
     },
   );
@@ -40,10 +42,14 @@ function loadPreload() {
 }
 
 describe('preload', () => {
-  it('exposes only getPathForFile and startDrag', () => {
+  it('exposes only getPathForFile, startDrag and chooseFile', () => {
     const { exposed } = loadPreload();
     expect(Object.keys(exposed)).toEqual(['pgmacDesktop']);
-    expect(Object.keys(exposed.pgmacDesktop as object)).toEqual(['getPathForFile', 'startDrag']);
+    expect(Object.keys(exposed.pgmacDesktop as object)).toEqual([
+      'getPathForFile',
+      'startDrag',
+      'chooseFile',
+    ]);
   });
 
   it('passes getPathForFile straight to webUtils', () => {
@@ -59,5 +65,15 @@ describe('preload', () => {
     const paths = ['/Users/me/a.txt', '/Users/me/b'];
     expect(bridge.startDrag!(paths)).toBeUndefined();
     expect(ipcRenderer.send).toHaveBeenCalledExactlyOnceWith('drag-out', paths);
+  });
+
+  it('asks main for a file with choose-file, passing nothing from the page', async () => {
+    const { exposed, ipcRenderer } = loadPreload();
+    const bridge = exposed.pgmacDesktop as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    expect(await bridge.chooseFile!('/etc/passwd', { properties: ['openDirectory'] })).toBe(
+      '/opt/homebrew/bin/adb',
+    );
+    expect(ipcRenderer.invoke).toHaveBeenCalledExactlyOnceWith('choose-file');
+    expect(ipcRenderer.send).not.toHaveBeenCalled();
   });
 });

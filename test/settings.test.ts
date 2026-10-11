@@ -7,6 +7,8 @@ import { buildApp, type App } from '../src/server/app.ts';
 import { effectiveSettings, loadConfig, type Config } from '../src/server/config.ts';
 import { StateStore, defaultStateFile, openStateStore } from '../src/server/stateStore.ts';
 import type { ServerMessage } from '../src/shared/protocol.ts';
+import { RequestError } from '../src/web/api.ts';
+import { fieldForError } from '../src/web/settingsForm.ts';
 import { FakeRunner } from './helpers.ts';
 
 const tmp = (prefix: string) => mkdtemp(path.join(os.tmpdir(), prefix));
@@ -295,6 +297,18 @@ describe('POST /api/settings', () => {
     const t = await start();
     expect(t.resolved).toEqual([undefined]);
     expect(t.sessionIp()).toBeNull();
+  });
+
+  it('names a field the Settings dialog can show each 400 under', async () => {
+    const t = await start();
+    const fieldOf = async (payload: object) => {
+      const r = await t.post(payload);
+      expect(r.statusCode).toBe(400);
+      return fieldForError(new RequestError(r.json().error, r.statusCode, r.json().code));
+    };
+    expect(await fieldOf({ defaultDeviceIp: '999.1.1.1', adbPath: '' })).toBe('defaultDeviceIp');
+    expect(await fieldOf({ defaultDeviceIp: '', adbPath: t.adbs.failing })).toBe('adbPath');
+    expect(await fieldOf({ defaultDeviceIp: '', adbPath: 'relative/adb' })).toBe('adbPath');
   });
 
   it.each([
