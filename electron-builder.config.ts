@@ -30,8 +30,17 @@ const config: Configuration = {
     '!**/*.map',
     '!**/.env',
     '!**/.env.*',
-    // Dependencies publish their docs, tests and benchmarks; nothing loads them at runtime.
-    '!**/node_modules/{*,@*/*}/{docs,test,tests,__tests__,benchmark,benchmarks}{,/**/*}',
+    // Dependencies publish docs, tests, examples, benchmarks and type declarations, at any depth
+    // inside the package; nothing loads them at runtime. License texts stay, whatever their
+    // extension, and source maps are already covered by `**/*.map`. The folder pattern starts
+    // inside a package (`[!@]*` keeps a scope folder from counting as one), so a dependency that
+    // is itself named `test` or `@scope/spec` still ships. Its zero-depth cases are spelled out
+    // (`{,**/}`, `{,/**}`) because minimatch misses some matches where a `**` between segments
+    // stands for no folders at all.
+    '!**/node_modules/{[!@]*,@*/*}/{,**/}{docs,test,tests,__tests__,spec,example,examples,benchmark,benchmarks}{,/**}',
+    '!**/node_modules/**/*.{test,spec}.*',
+    '!**/node_modules/**/!(LICENSE*|License*|license*).md',
+    '!**/node_modules/**/*.d.{ts,mts,cts}',
   ],
   asar: true,
   mac: {
