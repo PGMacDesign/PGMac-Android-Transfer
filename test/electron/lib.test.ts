@@ -1,13 +1,15 @@
 import net from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   OUTPUT_TAIL_LINES,
   OutputTail,
   START_FAILED_HEADING,
+  chooseFileHandler,
   failurePage,
   isListeningMessage,
   pickFreePort,
   serverEnv,
+  type OpenDialogResult,
 } from '../../electron/lib.ts';
 
 const listenOn = (port: number) =>
@@ -30,7 +32,7 @@ describe('pickFreePort', () => {
 
 describe('serverEnv', () => {
   it('adds the port, disables the browser and forwards the pool size the server would use', async () => {
-    const env = serverEnv({ PATH: '/usr/bin:/bin', HOME: '/Users/me' }, 51234);
+    const env = serverEnv({ PATH: '/usr/bin:/bin', HOME: '/Users/me' }, 51234, '/data');
     expect(env.PORT).toBe('51234');
     expect(env.OPEN_BROWSER).toBe('0');
     expect(env.PATH).toBe('/usr/bin:/bin');
@@ -41,13 +43,54 @@ describe('serverEnv', () => {
   });
 
   it("keeps the user's own UV_THREADPOOL_SIZE, as threadpool.ts does", () => {
-    expect(serverEnv({ UV_THREADPOOL_SIZE: '12' }, 1).UV_THREADPOOL_SIZE).toBe('12');
+    expect(serverEnv({ UV_THREADPOOL_SIZE: '12' }, 1, '/data').UV_THREADPOOL_SIZE).toBe('12');
   });
 
   it("overrides the parent's PORT and OPEN_BROWSER", () => {
-    const env = serverEnv({ PORT: '4848', OPEN_BROWSER: '1' }, 50000);
+    const env = serverEnv({ PORT: '4848', OPEN_BROWSER: '1' }, 50000, '/data');
     expect(env.PORT).toBe('50000');
     expect(env.OPEN_BROWSER).toBe('0');
+  });
+
+  it("points STATE_DIR at the userData folder it is given, over the parent's", () => {
+    const userData = '/Users/me/Library/Application Support/PGMac Android Transfer';
+    expect(serverEnv({}, 1, userData).STATE_DIR).toBe(userData);
+    expect(serverEnv({ STATE_DIR: '/elsewhere' }, 1, userData).STATE_DIR).toBe(userData);
+  });
+});
+
+describe('chooseFileHandler', () => {
+  const win = { webContents: { id: 1 } };
+  const handler = (result: OpenDialogResult, appWindow: typeof win | null = win) => {
+    const showOpenDialog = vi.fn(async () => result);
+    return {
+      showOpenDialog,
+      handle: chooseFileHandler({ appWindow: () => appWindow, showOpenDialog }),
+    };
+  };
+
+  it('opens a files-only picker on the app window and returns the chosen path', async () => {
+    const h = handler({ canceled: false, filePaths: ['/opt/homebrew/bin/adb'] });
+    expect(await h.handle({ sender: win.webContents })).toBe('/opt/homebrew/bin/adb');
+    expect(h.showOpenDialog).toHaveBeenCalledExactlyOnceWith(win, { properties: ['openFile'] });
+  });
+
+  it('returns null when cancelled or nothing was chosen', async () => {
+    expect(
+      await handler({ canceled: true, filePaths: ['/x'] }).handle({ sender: win.webContents }),
+    ).toBeNull();
+    expect(
+      await handler({ canceled: false, filePaths: [] }).handle({ sender: win.webContents }),
+    ).toBeNull();
+  });
+
+  it('opens nothing for another sender or with no window', async () => {
+    const other = handler({ canceled: false, filePaths: ['/x'] });
+    expect(await other.handle({ sender: {} })).toBeNull();
+    expect(other.showOpenDialog).not.toHaveBeenCalled();
+    const closed = handler({ canceled: false, filePaths: ['/x'] }, null);
+    expect(await closed.handle({ sender: win.webContents })).toBeNull();
+    expect(closed.showOpenDialog).not.toHaveBeenCalled();
   });
 });
 

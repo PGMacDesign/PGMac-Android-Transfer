@@ -7,7 +7,11 @@ import {
   type PgmacDesktop,
 } from '../../src/web/desktop.ts';
 
-const bridge = (): PgmacDesktop => ({ getPathForFile: vi.fn(() => ''), startDrag: vi.fn() });
+const bridge = (): PgmacDesktop => ({
+  getPathForFile: vi.fn(() => ''),
+  startDrag: vi.fn(),
+  chooseFile: vi.fn(async () => null),
+});
 const event = () => ({ preventDefault: vi.fn() });
 const mac: DragInfo = { from: 'mac', dir: '/Users/me/Pics', names: ['a.jpg', 'Album'] };
 const phone: DragInfo = { from: 'android', dir: '/sdcard/DCIM', names: ['b.jpg'] };

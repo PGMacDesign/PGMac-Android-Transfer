@@ -16,6 +16,7 @@ import {
   DownloadsModal,
   PairModal,
   SearchingModal,
+  SettingsModal,
   type ConfirmSpec,
   type ConflictState,
 } from './components/modals.tsx';
@@ -23,7 +24,7 @@ import { Pane, type OverInfo } from './components/Pane.tsx';
 import { TransferPanel } from './components/TransferPanel.tsx';
 import { Icon, MenuList, Spinner, Toast, useNow, type ToastData } from './components/ui.tsx';
 import { isNoTrash, noTrashConfirm } from './deletes.ts';
-import { desktopBridge, type DragInfo } from './desktop.ts';
+import { desktopBridge, fileChooser, type DragInfo } from './desktop.ts';
 import { collectDrops, isFinderDrag, type CapturedDrop, type FinderDrop } from './finder.ts';
 import { downloadRevealLabel, isActive, revealLabel } from './jobs.ts';
 import { appMenuItems, type AppMenuAction } from './menu.ts';
@@ -44,6 +45,7 @@ type ModalState =
       action: () => Promise<ModalState | void>;
       busy: boolean;
     }
+  | { kind: 'settings' }
   | { kind: 'downloads' }
   | null;
 
@@ -457,6 +459,9 @@ export function App() {
         return prefs.setDensity('compact');
       case 'density:comfortable':
         return prefs.setDensity('comfortable');
+      case 'settings':
+        setMenuOpen(false);
+        return setModal({ kind: 'settings' });
       case 'downloads':
         setMenuOpen(false);
         return setModal({ kind: 'downloads' });
@@ -605,6 +610,19 @@ export function App() {
           state={modal.state}
           now={now}
           onResolve={(d) => void resolveConflicts(modal.state.batchId, d)}
+          onCancel={closeModal}
+        />
+      ) : null}
+      {modal?.kind === 'settings' ? (
+        <SettingsModal
+          settings={snap.settings}
+          adb={snap.adb}
+          chooseFile={fileChooser()}
+          onSave={async (patch) => {
+            await api.settings(patch);
+            setModal(null);
+            showToast('Settings saved.', 'ok');
+          }}
           onCancel={closeModal}
         />
       ) : null}

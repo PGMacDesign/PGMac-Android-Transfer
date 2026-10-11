@@ -75,6 +75,12 @@ The session stays up until you end it. If the phone drops off the network, the a
 
 Android turns Wireless debugging off when the phone switches WiFi networks. If Start Session can't find the phone, check that the toggle is still on.
 
+## Settings
+
+**Settings…** in the menu sets the default device IP and the adb path. Leave a field empty to fall back to `DEFAULT_DEVICE_IP` or `ADB_PATH` from `.env`, and otherwise to choosing a device each time and finding adb automatically. In the desktop app, **Locate adb…** picks the file in a Finder dialog. Changes apply at once and are kept across restarts.
+
+Browser mode keeps its settings where it always has; the desktop app keeps its own in its folder under `~/Library/Application Support`, starting from a copy of browser mode's the first time it runs.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and edit as needed. Every value is optional.
@@ -114,7 +120,7 @@ npm run format
 
 ## Troubleshooting
 
-- **"Android platform tools are required"**: install them with `brew install android-platform-tools`, or set `ADB_PATH`, then click **Check again**.
+- **"Android platform tools are required"**: install them with `brew install android-platform-tools`, or set the adb path under **Settings…** (or `ADB_PATH`), then click **Check again**.
 - **Start Session finds nothing**: confirm Wireless debugging is on and the phone and Mac are on the same network. Some routers block mDNS between devices; use **Pair a new device > Pairing code** in that case.
 - **"Port 4848 is already in use"**: the app is probably already running. Open `http://127.0.0.1:4848`, or set a different `PORT`.
 - **Can't see `Android/data`**: Android 11+ blocks other apps' private folders over ADB unless the phone is rooted.

@@ -5,7 +5,7 @@ export const QUIT_SERVER_LABEL = 'Quit server';
 
 /** What a menu item does, passed back through MenuList's `onSelect`. */
 export type AppMenuAction =
-  `theme:${ThemePref}` | `density:${Density}` | 'downloads' | 'pair' | 'quitServer';
+  `theme:${ThemePref}` | `density:${Density}` | 'settings' | 'downloads' | 'pair' | 'quitServer';
 
 export interface AppMenuState {
   theme: ThemePref;
@@ -38,6 +38,7 @@ export function appMenuItems(s: AppMenuState): MenuEntry[] {
     item('density:compact', 'Compact', check(s.density === 'compact')),
     item('density:comfortable', 'Comfortable', check(s.density === 'comfortable')),
     { kind: 'sep' },
+    item('settings', 'Settings…', 'settings'),
     item('downloads', 'Downloads folder…', 'download'),
     item('pair', 'Pair a new device…', 'qr_code_2', !s.adbFound),
   ];

@@ -12,4 +12,7 @@ contextBridge.exposeInMainWorld('pgmacDesktop', {
   startDrag: (paths) => {
     ipcRenderer.send('drag-out', paths);
   },
+  // A native picker for one file; resolves to its path, or null when cancelled. Nothing from
+  // the page is passed along.
+  chooseFile: () => ipcRenderer.invoke('choose-file'),
 });
