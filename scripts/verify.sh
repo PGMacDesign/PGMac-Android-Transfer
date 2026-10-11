@@ -8,6 +8,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 start="$(date +%s)"
+# Fingerprint of tracked changes, so a run with uncommitted work still passes as long as
+# verification itself doesn't change anything.
+tracked_state() { git status --porcelain --untracked-files=no; git diff HEAD --binary | shasum; }
+before="$(tracked_state)"
 echo "verify: node $(node --version), npm $(npm --version)"
 
 # npm writes node_modules/.package-lock.json on every install, so a lockfile newer than it
@@ -23,7 +27,7 @@ npm run format:check
 npm test
 npm run build
 
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+if [ "$(tracked_state)" != "$before" ]; then
   git status --porcelain --untracked-files=no >&2
   echo "verify: FAIL: tracked files changed during verification" >&2
   exit 1
