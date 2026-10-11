@@ -13,6 +13,7 @@ import type {
   Side,
   StartSessionResponse,
 } from '../shared/protocol.ts';
+import { authHeaders } from './token.ts';
 
 export class RequestError extends Error {
   readonly code: ApiError['code'] | undefined;
@@ -33,10 +34,11 @@ async function request<T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const init: RequestInit = { method };
+  const headers: Record<string, string> = authHeaders();
+  const init: RequestInit = { method, headers };
   if (signal) init.signal = signal;
   if (body !== undefined) {
-    init.headers = { 'content-type': 'application/json' };
+    headers['content-type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
   let res: Response;

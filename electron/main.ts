@@ -13,7 +13,6 @@ import {
 import path from 'node:path';
 import {
   OutputTail,
-  SERVER_HOST,
   START_FAILED_HEADING,
   STOPPED_HEADING,
   chooseFileHandler,
@@ -21,8 +20,11 @@ import {
   failurePage,
   isListeningMessage,
   pickFreePort,
+  redact,
   serverEnv,
+  windowUrl,
 } from './lib.ts';
+import { resolveApiToken } from '../src/server/token.ts';
 import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
 import { isExternalUrl } from './links.ts';
 import { appMenuTemplate } from './menu.ts';
@@ -142,10 +144,13 @@ function drained(streams: NodeJS.ReadableStream[]): Promise<void> {
 
 async function startServer(): Promise<void> {
   const port = await pickFreePort();
+  // Kept in memory only: handed to the server through its environment and to the window
+  // through the URL fragment, never written to disk or printed.
+  const token = resolveApiToken(process.env);
   const tail = new OutputTail();
   // Forked exactly once per launch. A server that dies is reported, never silently restarted.
   const child = utilityProcess.fork(serverEntry, [], {
-    env: serverEnv(process.env, port, app.getPath('userData')),
+    env: serverEnv(process.env, port, app.getPath('userData'), token),
     stdio: 'pipe',
     serviceName: 'PGMac Android Transfer server',
   });
@@ -163,7 +168,7 @@ async function startServer(): Promise<void> {
     stream.setEncoding('utf8');
     stream.on('data', (chunk: string) => {
       tail.write(name, chunk);
-      echo.write(chunk);
+      echo.write(redact(chunk, token));
     });
   }
 
@@ -182,7 +187,7 @@ async function startServer(): Promise<void> {
     quitter.onServerMessage(message);
     if (listening || !isListeningMessage(message, port)) return;
     listening = true;
-    showPage(`http://${SERVER_HOST}:${port}`);
+    showPage(windowUrl(port, token));
   });
 
   child.once('exit', (code) => {
@@ -191,7 +196,9 @@ async function startServer(): Promise<void> {
     if (quitting()) return;
     void drained(streams).then(() => {
       if (quitting()) return;
-      const lines = [...tail.lines(), `(exit code ${code})`].slice(-tail.limit);
+      const lines = [...tail.lines().map((l) => redact(l, token)), `(exit code ${code})`].slice(
+        -tail.limit,
+      );
       if (!listening || mainWindow) {
         showFailure(listening ? STOPPED_HEADING : START_FAILED_HEADING, lines);
       } else {

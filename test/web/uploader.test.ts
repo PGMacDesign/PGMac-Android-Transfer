@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { JobStatus } from '../../src/shared/protocol.ts';
 import type { FinderDrop } from '../../src/web/finder.ts';
 import { Limiter, runUploads, uploadOne, type UploaderDeps } from '../../src/web/uploader.ts';
@@ -9,22 +9,31 @@ const drop = (rels: string[], emptyDirs: string[] = []): FinderDrop => ({
   emptyDirs,
 });
 
+beforeAll(() => {
+  // The page's token, as a `#token=` link hands it over.
+  vi.stubGlobal('location', { hash: '#token=abc123', pathname: '/', search: '' });
+  vi.stubGlobal('history', { replaceState: () => undefined });
+  vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => undefined });
+});
+
 function fakeDeps(opts: {
   status?: (id: string, calls: number) => JobStatus | undefined;
   fail?: (url: string) => boolean;
   throwOn?: (url: string) => boolean;
 }) {
   const calls: { url: string; method: string }[] = [];
+  const auth: (string | undefined)[] = [];
   const deps: UploaderDeps = {
     fetch: async (input, init) => {
       const url = String(input);
       calls.push({ url, method: init?.method ?? 'GET' });
+      auth.push((init?.headers as Record<string, string> | undefined)?.authorization);
       if (opts.throwOn?.(url)) throw new TypeError('network');
       return new Response('{}', { status: opts.fail?.(url) ? 409 : 200 });
     },
     jobStatus: (id) => opts.status?.(id, calls.length) ?? 'uploading',
   };
-  return { deps, calls };
+  return { deps, calls, auth };
 }
 
 describe('uploadOne', () => {
@@ -38,6 +47,12 @@ describe('uploadOne', () => {
       { url: '/api/uploads/j1/dir?path=e', method: 'POST' },
       { url: '/api/uploads/j1/complete', method: 'POST' },
     ]);
+  });
+
+  it('sends the page token with every request', async () => {
+    const { deps, auth } = fakeDeps({});
+    await uploadOne({ jobId: 'j1', drop: drop(['a'], ['e']) }, deps);
+    expect(auth).toEqual(['Bearer abc123', 'Bearer abc123', 'Bearer abc123']);
   });
 
   it('keeps going while the job has no event yet', async () => {

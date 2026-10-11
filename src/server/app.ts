@@ -22,6 +22,8 @@ import { currentPlatform, defaultDownloadsDir, defaultStagingRoot } from './plat
 import { reveal } from './reveal.ts';
 import { volumeEventHandler } from './volumeEvents.ts';
 import { StateStore } from './stateStore.ts';
+import { tokenMatches } from './token.ts';
+import { decodeWireToken } from '../shared/token.ts';
 import { AdbRunner } from './transfers/adbRunner.ts';
 import { forceStop } from './transfers/children.ts';
 import { NO_STAGING_SPACE, TransferQueue, type TransferRunner } from './transfers/queue.ts';
@@ -57,6 +59,11 @@ export interface AppOptions {
   /** Moves Mac paths to the Trash when there is no `/usr/bin/trash` (the desktop app's). */
   trash?: TrashFn;
   onQuit?: () => void;
+  /**
+   * When set, every `/api/*` request and the `/ws` upgrade must present it (see
+   * `resolveApiToken`). Off by default so tests can call the API without one.
+   */
+  token?: string;
 }
 
 export interface App {
@@ -75,6 +82,33 @@ const sideParam = (s: unknown): Side => {
   if (s === 'android' || s === 'mac') return s;
   throw invalid('Unknown side.');
 };
+
+const WS_PROTOCOL = 'pgmac';
+const TOKEN_PROTOCOL_PREFIX = 'token.';
+
+const isGuardedPath = (p: string) => p === '/ws' || p.startsWith('/api/');
+
+/**
+ * Checks the matched route as well as the raw path: the router decodes percent-escapes, so a
+ * raw `/%61pi/snapshot` still reaches the `/api/snapshot` handler.
+ */
+function needsToken(req: FastifyRequest): boolean {
+  const route = req.routeOptions.url;
+  return isGuardedPath(req.url.split('?')[0] ?? '') || (!!route && isGuardedPath(route));
+}
+
+function presentedToken(req: FastifyRequest): string | undefined {
+  const bearer = /^Bearer\s+(\S+)\s*$/i.exec(req.headers.authorization ?? '')?.[1];
+  if (bearer) return decodeWireToken(bearer);
+  const protocols = req.headers['sec-websocket-protocol'];
+  if (typeof protocols !== 'string') return undefined;
+  const wire = protocols
+    .split(',')
+    .map((p) => p.trim())
+    .find((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX))
+    ?.slice(TOKEN_PROTOCOL_PREFIX.length);
+  return wire === undefined ? undefined : decodeWireToken(wire);
+}
 
 const HOST_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
 
@@ -215,6 +249,16 @@ export async function buildApp(opts: AppOptions): Promise<App> {
 
   const server = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
 
+  // Registered before the checks below: its own onRequest hook marks upgrade requests, and
+  // only marked ones get their socket closed after a refusal; otherwise it stays open and
+  // server.close() never finishes.
+  await server.register(fastifyWebsocket, {
+    // The page offers `pgmac` plus its token as a second subprotocol (a browser WebSocket can't
+    // set headers). Selecting `pgmac` lets the browser accept the connection without the token
+    // ever being echoed back in the response.
+    options: { handleProtocols: (offered) => (offered.has(WS_PROTOCOL) ? WS_PROTOCOL : false) },
+  });
+
   // The API can read and delete local files, so only answer requests addressed to this
   // loopback server. Checking Host blocks DNS rebinding; checking Origin blocks other sites.
   const hosts = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
@@ -228,6 +272,14 @@ export async function buildApp(opts: AppOptions): Promise<App> {
       reply.code(403).send({ error: 'Forbidden' });
       return reply;
     }
+    // Loopback is shared by every process and every user account on the Mac, and a request
+    // with no Origin passes the check above, so the API also needs a secret only our page has.
+    const token = opts.token;
+    if (token === undefined || !needsToken(req)) return;
+    if (!tokenMatches(presentedToken(req), token)) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return reply;
+    }
   });
 
   server.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
@@ -239,7 +291,6 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     reply.code(status).send({ error: err.message || 'Internal error' });
   });
 
-  await server.register(fastifyWebsocket);
   server.get('/ws', { websocket: true }, (socket) => {
     const client = { send: (d: string) => socket.send(d) };
     hub.add(client);

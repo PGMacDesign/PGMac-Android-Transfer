@@ -17,7 +17,12 @@ export interface Config {
 /** Loads `.env` from the project root (if present) and reads config from the environment. */
 export function loadConfig(root: string, env: NodeJS.ProcessEnv = process.env): Config {
   const envFile = path.join(root, '.env');
-  if (env === process.env && existsSync(envFile)) process.loadEnvFile(envFile);
+  if (env === process.env && existsSync(envFile)) {
+    // loadEnvFile never replaces a variable that is already set, even to nothing, and an empty
+    // API_TOKEN means "not configured", so it must not hide a token set in .env.
+    if (!env.API_TOKEN?.trim()) delete env.API_TOKEN;
+    process.loadEnvFile(envFile);
+  }
 
   const port = Number(env.PORT || 4848);
   const max = Number(env.MAX_CONCURRENT_TRANSFERS || 3);

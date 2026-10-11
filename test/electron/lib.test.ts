@@ -8,9 +8,12 @@ import {
   failurePage,
   isListeningMessage,
   pickFreePort,
+  redact,
   serverEnv,
+  windowUrl,
   type OpenDialogResult,
 } from '../../electron/lib.ts';
+import { resolveApiToken } from '../../src/server/token.ts';
 
 const listenOn = (port: number) =>
   new Promise<net.Server>((resolve, reject) => {
@@ -32,7 +35,7 @@ describe('pickFreePort', () => {
 
 describe('serverEnv', () => {
   it('adds the port, disables the browser and forwards the pool size the server would use', async () => {
-    const env = serverEnv({ PATH: '/usr/bin:/bin', HOME: '/Users/me' }, 51234, '/data');
+    const env = serverEnv({ PATH: '/usr/bin:/bin', HOME: '/Users/me' }, 51234, '/data', 'tok');
     expect(env.PORT).toBe('51234');
     expect(env.OPEN_BROWSER).toBe('0');
     expect(env.PATH).toBe('/usr/bin:/bin');
@@ -43,19 +46,26 @@ describe('serverEnv', () => {
   });
 
   it("keeps the user's own UV_THREADPOOL_SIZE, as threadpool.ts does", () => {
-    expect(serverEnv({ UV_THREADPOOL_SIZE: '12' }, 1, '/data').UV_THREADPOOL_SIZE).toBe('12');
+    expect(serverEnv({ UV_THREADPOOL_SIZE: '12' }, 1, '/data', 'tok').UV_THREADPOOL_SIZE).toBe(
+      '12',
+    );
   });
 
   it("overrides the parent's PORT and OPEN_BROWSER", () => {
-    const env = serverEnv({ PORT: '4848', OPEN_BROWSER: '1' }, 50000, '/data');
+    const env = serverEnv({ PORT: '4848', OPEN_BROWSER: '1' }, 50000, '/data', 'tok');
     expect(env.PORT).toBe('50000');
     expect(env.OPEN_BROWSER).toBe('0');
   });
 
+  it("passes the launch's token as API_TOKEN, over the parent's", () => {
+    expect(serverEnv({}, 1, '/data', 'abc123').API_TOKEN).toBe('abc123');
+    expect(serverEnv({ API_TOKEN: 'old' }, 1, '/data', 'abc123').API_TOKEN).toBe('abc123');
+  });
+
   it("points STATE_DIR at the userData folder it is given, over the parent's", () => {
     const userData = '/Users/me/Library/Application Support/PGMac Android Transfer';
-    expect(serverEnv({}, 1, userData).STATE_DIR).toBe(userData);
-    expect(serverEnv({ STATE_DIR: '/elsewhere' }, 1, userData).STATE_DIR).toBe(userData);
+    expect(serverEnv({}, 1, userData, 'tok').STATE_DIR).toBe(userData);
+    expect(serverEnv({ STATE_DIR: '/elsewhere' }, 1, userData, 'tok').STATE_DIR).toBe(userData);
   });
 });
 
@@ -138,5 +148,20 @@ describe('failurePage', () => {
     expect(html).toContain('<h1>PGMac Android Transfer couldn&#39;t start its server.</h1>');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;\nPort in use');
     expect(html).not.toContain('<script>');
+  });
+});
+
+describe('windowUrl', () => {
+  it('loads the server with the token the server was given in the fragment', () => {
+    const token = resolveApiToken({});
+    const env = serverEnv({}, 51234, '/data', token);
+    expect(windowUrl(51234, token)).toBe(`http://127.0.0.1:51234/#token=${env.API_TOKEN}`);
+  });
+});
+
+describe('redact', () => {
+  it('hides every copy of the token', () => {
+    expect(redact('a tok b tok', 'tok')).toBe('a [token] b [token]');
+    expect(redact('nothing here', 'tok')).toBe('nothing here');
   });
 });
