@@ -18,7 +18,7 @@ size: M
 ## Acceptance criteria
 
 1. Use electron-builder or Electron Forge, and state the choice and the reason in a comment at the top of the packaging config (both wrap `@electron/osx-sign` and `@electron/notarize` for later). Add it with `npm install -D`.
-2. `npm run make` runs `vite build`, then packages. It is not part of `scripts/verify.sh` or CI (slow and macOS-only).
+2. `npm run make` runs `vite build`, then packages. It is not part of `scripts/verify.sh` or CI (slow and macOS-only). Don't run it yourself: building the DMG mounts disk images and opens Finder windows on the owner's desktop. The config test below is the automated check; the owner runs `npm run make`.
 3. The app is named "PGMac Android Transfer", bundle id `com.pgmacdesign.androidtransfer`, version from `package.json`, category `public.app-category.utilities`.
 4. The bundle contains `electron/`, `src/server/`, `src/shared/`, `dist/web/` and production `node_modules` only. No `test/`, `docs/`, `src/web/` sources, `scripts/`, `factory/`, devDependencies, `.env` files or source maps.
 5. Targets: a universal (arm64 and x64) DMG with the usual drag-to-Applications layout. If universal fails for a real reason, two DMGs (arm64 and x64) instead, with the reason in the config comment.
