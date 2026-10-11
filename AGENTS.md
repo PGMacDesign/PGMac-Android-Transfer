@@ -33,6 +33,10 @@ PGMac Android Transfer moves files between a Mac and an Android device over adb 
 7. **Code that can be unit tested lives outside Electron entry files.** Logic used by `electron/main.ts` or the preload (port choice, env building, path validation, config precedence) goes in modules that don't import `electron`, so Vitest can test it.
 8. **`src/server/threadpool.ts` stays the first import of the server entry**, and any process that starts the server sets `UV_THREADPOOL_SIZE` before the server starts.
 
+## Never open windows
+
+This runs on the owner's desktop while they work. Never launch anything that opens a window, takes focus or opens a browser tab: no `npm run app`, `npm start`, `npm run dev`, `electron`, `open`, `osascript`, packaged `.app` launches, or tests that do any of these. Verify with unit tests and `./scripts/verify.sh` only; GUI behaviour is the owner's manual check after merge. If the server must run in a test, start it in-process with `buildApp` (no `listen` on 4848, no browser).
+
 ## Dependencies
 
 Add or change dependencies only with `npm install <pkg>` (or `npm install -D <pkg>`), so `package-lock.json` updates with them. A hand-edited `package.json` fails `npm ci`. Keep production dependencies to what the ticket needs; everything in them ships inside the signed app.
