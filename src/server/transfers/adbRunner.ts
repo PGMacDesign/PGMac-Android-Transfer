@@ -10,6 +10,7 @@ import {
   type TransferRunner,
   type TransferSpec,
 } from './queue.ts';
+import { trackChild } from './children.ts';
 
 /** Turns adb push/pull stderr into a short message for the transfer row. */
 export function describeAdbFailure(output: string): string {
@@ -164,6 +165,7 @@ export class AdbRunner implements TransferRunner {
           })
         : adb.spawn(['-s', serial, push ? 'push' : 'pull', spec.srcPath, spec.partialPath]);
       const proc = child;
+      trackChild(proc);
       let output = '';
       proc.stdout?.on('data', (d: Buffer) => (output = (output + d.toString()).slice(-4000)));
       proc.stderr?.on('data', (d: Buffer) => (output = (output + d.toString()).slice(-4000)));

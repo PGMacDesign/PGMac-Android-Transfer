@@ -5,8 +5,16 @@ import { fileURLToPath } from 'node:url';
 import open from 'open';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
+import { listenForForceStop, type ParentPortReceiver } from './parentPort.ts';
 import { announceListening, type ParentPortLike } from './readiness.ts';
 import { openStateStore } from './stateStore.ts';
+import { forceStop } from './transfers/children.ts';
+
+// Every way out of this process, including process.exit with transfers running, passes here;
+// only synchronous work is possible, which is all forceStop does.
+process.on('exit', forceStop);
+const parentPort = (process as { parentPort?: ParentPortLike & ParentPortReceiver }).parentPort;
+listenForForceStop(parentPort, { forceStop, exit: (code) => process.exit(code) });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const config = loadConfig(root);
@@ -37,7 +45,7 @@ try {
 await app.clearStaleStaging();
 // After the cleanup, like the browser open below: a page opened sooner could start an upload
 // whose staging files the cleanup then deletes.
-announceListening(config.port, (process as { parentPort?: ParentPortLike }).parentPort);
+announceListening(config.port, parentPort);
 
 const url = `http://127.0.0.1:${dev ? 5173 : config.port}`;
 console.log(`PGMac Android Transfer is running at ${url}`);
