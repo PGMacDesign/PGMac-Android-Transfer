@@ -10,7 +10,9 @@ import {
   listenForForceStop,
   listenForQuit,
   stopOnSignal,
+  trashThroughParent,
   type QuitPort,
+  type TrashPort,
 } from './parentPort.ts';
 import { announceListening, type ParentPortLike } from './readiness.ts';
 import { openStateStore } from './stateStore.ts';
@@ -19,7 +21,7 @@ import { forceStop } from './transfers/children.ts';
 // Every way out of this process, including process.exit with transfers running, passes here;
 // only synchronous work is possible, which is all forceStop does.
 process.on('exit', forceStop);
-const parentPort = (process as { parentPort?: ParentPortLike & QuitPort }).parentPort;
+const parentPort = (process as { parentPort?: ParentPortLike & QuitPort & TrashPort }).parentPort;
 listenForForceStop(parentPort, { forceStop, exit: (code) => process.exit(code) });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -32,6 +34,7 @@ const app = await buildApp({
   store: openStateStore(config.stateDir),
   webRoot: dev ? undefined : path.join(root, 'dist', 'web'),
   dev,
+  trash: parentPort ? trashThroughParent(parentPort) : undefined,
   onQuit: () => process.exit(0),
 });
 listenForQuit(parentPort, {

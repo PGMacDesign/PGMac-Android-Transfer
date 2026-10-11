@@ -11,7 +11,7 @@ import { Adb, resolveAdbPath } from './adb/adb.ts';
 import { clampConcurrency, effectiveSettings, type Config } from './config.ts';
 import { HttpError, invalid, noSession } from './errors.ts';
 import { AndroidFs } from './fs/android.ts';
-import { MacFs } from './fs/mac.ts';
+import { MacFs, type TrashFn } from './fs/mac.ts';
 import { VolumeMonitor, makeProbe, readSystemMounts } from './fs/volumes.ts';
 import { joinPosix, normalizeAbs, dirName } from './fs/paths.ts';
 import type { SideFs } from './fs/types.ts';
@@ -54,6 +54,8 @@ export interface AppOptions {
   reveal?: (paths: string[]) => void;
   /** Replaces the network volume monitor (tests). */
   volumes?: VolumeMonitor;
+  /** Moves Mac paths to the Trash when there is no `/usr/bin/trash` (the desktop app's). */
+  trash?: TrashFn;
   onQuit?: () => void;
 }
 
@@ -143,7 +145,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   const volumes =
     opts.volumes ?? new VolumeMonitor({ readMounts: readSystemMounts, probe: makeProbe() });
   await volumes.start();
-  const mac = new MacFs(opts.home, volumes);
+  const mac = new MacFs(opts.home, volumes, { trash: opts.trash });
   // One folder per port: another copy of the app on a different port clears only its own.
   const staging = new Staging(
     opts.stagingRoot ?? path.join(defaultStagingRoot(platform), String(config.port)),

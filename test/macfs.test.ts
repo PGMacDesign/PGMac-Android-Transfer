@@ -10,8 +10,8 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { MacFs } from '../src/server/fs/mac.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { MacFs, moveToTrash, type TrashDeps } from '../src/server/fs/mac.ts';
 import { HttpError } from '../src/server/errors.ts';
 
 async function tmp() {
@@ -285,5 +285,102 @@ describe('MacFs on network volumes', () => {
     down = false;
     await fs.restoreParked();
     expect(await readdir(path.join(root, 'pics'))).toEqual(['old.jpg']);
+  });
+});
+
+describe('moving to the Trash', () => {
+  const enoent = () => Object.assign(new Error('no such file'), { code: 'ENOENT' });
+  /** Records every command instead of running it; nothing here spawns a process. */
+  function deps(opts: { cli: boolean; cliFails?: Error; trash?: TrashDeps['trash'] }) {
+    const commands: string[] = [];
+    const d: TrashDeps = {
+      trash: opts.trash,
+      access: async () => {
+        if (!opts.cli) throw enoent();
+      },
+      run: async (cmd) => {
+        commands.push(cmd);
+        if (cmd === '/usr/bin/trash' && opts.cliFails) throw opts.cliFails;
+        return { stdout: '', stderr: '' };
+      },
+      platform: 'darwin',
+    };
+    return { d, commands };
+  }
+
+  it('uses the injected function, never osascript, when /usr/bin/trash is missing', async () => {
+    const trash = vi.fn(async () => undefined);
+    const { d, commands } = deps({ cli: false, trash });
+    await moveToTrash(['/Users/me/a.txt', '/Users/me/b.txt'], d);
+    expect(trash).toHaveBeenCalledWith(['/Users/me/a.txt', '/Users/me/b.txt']);
+    expect(commands).toEqual([]);
+  });
+
+  it('uses the injected function when spawning /usr/bin/trash finds nothing', async () => {
+    const trash = vi.fn(async () => undefined);
+    const { d, commands } = deps({ cli: true, cliFails: enoent(), trash });
+    await moveToTrash(['/Users/me/a.txt'], d);
+    expect(trash).toHaveBeenCalledOnce();
+    expect(commands).toEqual(['/usr/bin/trash']);
+  });
+
+  it('prefers /usr/bin/trash over the injected function', async () => {
+    const trash = vi.fn(async () => undefined);
+    const { d, commands } = deps({ cli: true, trash });
+    await moveToTrash(['/Users/me/a.txt'], d);
+    expect(commands).toEqual(['/usr/bin/trash']);
+    expect(trash).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a failing /usr/bin/trash through the injected function', async () => {
+    const trash = vi.fn(async () => undefined);
+    const failed = Object.assign(new Error('trash failed'), { code: 1 });
+    const { d } = deps({ cli: true, cliFails: failed, trash });
+    await expect(moveToTrash(['/Users/me/a.txt'], d)).rejects.toBe(failed);
+    expect(trash).not.toHaveBeenCalled();
+  });
+
+  it('keeps the old order without an injected function', async () => {
+    const mac = deps({ cli: false });
+    await moveToTrash(['/Users/me/a.txt'], mac.d);
+    expect(mac.commands).toEqual(['osascript']);
+    const linux = deps({ cli: false });
+    await moveToTrash(['/home/me/a.txt'], { ...linux.d, platform: 'linux' });
+    expect(linux.commands).toEqual(['gio']);
+    const cli = deps({ cli: true });
+    await moveToTrash(['/Users/me/a.txt'], cli.d);
+    expect(cli.commands).toEqual(['/usr/bin/trash']);
+  });
+
+  it('offers a permanent delete when the injected function finds no Trash on a volume', async () => {
+    const root = '/Volumes/pgmac-test-no-such-volume';
+    const { d, commands } = deps({
+      cli: false,
+      trash: async () => {
+        throw new Error('The operation couldn’t be completed.');
+      },
+    });
+    const fs = new MacFs(os.homedir(), undefined, d);
+    await expect(fs.remove([`${root}/a.txt`])).rejects.toMatchObject({
+      status: 409,
+      code: 'NO_TRASH',
+    });
+    expect(commands).toEqual([]);
+  });
+
+  it('reports a failure on the startup disk as an error, never deleting anything', async () => {
+    const d = await tmp();
+    await writeFile(path.join(d, 'a.txt'), 'a');
+    const fs = new MacFs(d, undefined, {
+      ...deps({ cli: false }).d,
+      trash: async () => {
+        throw new Error('Permission denied');
+      },
+    });
+    await expect(fs.remove([path.join(d, 'a.txt')])).rejects.toMatchObject({
+      status: 500,
+      message: 'Could not move to Trash: Permission denied',
+    });
+    expect(await readdir(d)).toEqual(['a.txt']);
   });
 });

@@ -66,6 +66,7 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 - Mac shortcuts: Home, Desktop, Downloads, Documents.
 - File ops on both panes: new folder, rename (F2 / double-click name), delete with confirmation.
   - Mac delete moves to Trash (recoverable).
+  - Without `/usr/bin/trash` (before macOS 15), the desktop app trashes through Electron's `shell.trashItem` in main, over the parent port, so it never drives Finder with AppleScript; browser mode still uses Finder.
   - Android delete is permanent `rm -r`; the confirm dialog says so.
 - Android paths are passed to `adb shell` with strict single-quote escaping. All user-supplied paths are validated (no NUL bytes, absolute paths only).
 
