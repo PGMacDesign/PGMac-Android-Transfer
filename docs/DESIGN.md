@@ -122,6 +122,7 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 - `.DS_Store` and `._*` files are copied like any other file, as in a Mac pane drag; only uploads leave them out.
 - A copy into the dropped folder itself (or one of its subfolders) is refused at planning.
 - If any dropped item has no path (`getPathForFile` returns `""`, as for items dragged from some apps), the whole drop uses the upload path above. Browser mode has no bridge and always uploads.
+- Drag-out: a Mac-pane drag in the app calls `pgmacDesktop.startDrag(paths)`, a one-way `drag-out` message whose synchronous main handler (app window only, absolute paths without NUL, at most 1,000, no filesystem call) starts a native file drag instead of the in-app one, so no in-app drag state is set; a drop back into the window is a real-path drop, ignored on the Mac pane when every item already sits in its folder.
 
 ### Show in Finder / Show in Files
 

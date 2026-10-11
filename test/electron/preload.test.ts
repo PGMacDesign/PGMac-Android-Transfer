@@ -15,8 +15,18 @@ function loadPreload() {
       },
     },
   );
+  const ipcRenderer = new Proxy(
+    { send: vi.fn() },
+    {
+      get(target, key) {
+        if (key !== 'send') throw new Error(`ipcRenderer.${String(key)} was used`);
+        return target.send;
+      },
+    },
+  );
   const electron = {
     contextBridge: { exposeInMainWorld: (k: string, v: unknown) => (exposed[k] = v) },
+    ipcRenderer,
     webUtils,
   };
   const src = readFileSync(path.join(import.meta.dirname, '../../electron/preload.cjs'), 'utf8');
@@ -26,15 +36,28 @@ function loadPreload() {
       return electron;
     },
   });
-  return { exposed, webUtils };
+  return { exposed, ipcRenderer, webUtils };
 }
 
 describe('preload', () => {
-  it('exposes only getPathForFile, passed straight to webUtils', () => {
+  it('exposes only getPathForFile and startDrag', () => {
+    const { exposed } = loadPreload();
+    expect(Object.keys(exposed)).toEqual(['pgmacDesktop']);
+    expect(Object.keys(exposed.pgmacDesktop as object)).toEqual(['getPathForFile', 'startDrag']);
+  });
+
+  it('passes getPathForFile straight to webUtils', () => {
     const { exposed, webUtils } = loadPreload();
     const bridge = exposed.pgmacDesktop as Record<string, (f: unknown) => string>;
-    expect(Object.keys(bridge)).toEqual(['getPathForFile']);
     expect(bridge.getPathForFile!({ name: 'a.txt' })).toBe('/real/a.txt');
     expect(webUtils.getPathForFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends startDrag to main on drag-out and returns nothing to wait on', () => {
+    const { exposed, ipcRenderer } = loadPreload();
+    const bridge = exposed.pgmacDesktop as Record<string, (p: unknown) => unknown>;
+    const paths = ['/Users/me/a.txt', '/Users/me/b'];
+    expect(bridge.startDrag!(paths)).toBeUndefined();
+    expect(ipcRenderer.send).toHaveBeenCalledExactlyOnceWith('drag-out', paths);
   });
 });

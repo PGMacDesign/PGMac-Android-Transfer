@@ -19,11 +19,11 @@ import {
   type ConfirmSpec,
   type ConflictState,
 } from './components/modals.tsx';
-import { Pane, type DragInfo, type OverInfo } from './components/Pane.tsx';
+import { Pane, type OverInfo } from './components/Pane.tsx';
 import { TransferPanel } from './components/TransferPanel.tsx';
 import { Icon, MenuList, Spinner, Toast, useNow, type ToastData } from './components/ui.tsx';
 import { isNoTrash, noTrashConfirm } from './deletes.ts';
-import { desktopBridge } from './desktop.ts';
+import { desktopBridge, type DragInfo } from './desktop.ts';
 import { collectDrops, isFinderDrag, type CapturedDrop, type FinderDrop } from './finder.ts';
 import { downloadRevealLabel, isActive, revealLabel } from './jobs.ts';
 import { appMenuItems, type AppMenuAction } from './menu.ts';

@@ -1,7 +1,9 @@
 import {
   app,
   BrowserWindow,
+  ipcMain,
   Menu,
+  nativeImage,
   screen,
   shell,
   utilityProcess,
@@ -19,12 +21,14 @@ import {
   pickFreePort,
   serverEnv,
 } from './lib.ts';
+import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
 import { isExternalUrl } from './links.ts';
 import { appMenuTemplate } from './menu.ts';
 import { loadWindowState, saveWindowState, windowStatePath } from './windowState.ts';
 
 const serverEntry = path.join(import.meta.dirname, '..', 'src', 'server', 'index.ts');
 const preload = path.join(import.meta.dirname, 'preload.cjs');
+const dragIconPath = path.join(import.meta.dirname, 'drag-icon.png');
 
 // How long the server gets to cancel transfers and disconnect before it is killed outright.
 const STOP_GRACE_MS = 5000;
@@ -210,6 +214,24 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 app
   .whenReady()
   .then(() => {
+    // Read once here: macOS refuses a native drag without a non-empty icon, and the drag
+    // handler itself must not touch the disk.
+    let dragIcon = nativeImage.createFromPath(dragIconPath);
+    if (dragIcon.isEmpty()) {
+      console.error('Could not load the drag icon; using a built-in one.');
+      const { buffer, width, height } = fallbackDragIcon();
+      dragIcon = nativeImage.createFromBitmap(buffer, { width, height });
+    }
+    // Synchronous, with no reply: the page is still inside its dragstart handler, and the drag
+    // only starts if startDrag runs before that handler returns.
+    ipcMain.on(
+      'drag-out',
+      dragOutHandler({
+        appContents: () => mainWindow?.webContents ?? null,
+        icon: dragIcon,
+        log: (message, err) => console.error(message, err),
+      }),
+    );
     Menu.setApplicationMenu(
       Menu.buildFromTemplate(
         appMenuTemplate({
