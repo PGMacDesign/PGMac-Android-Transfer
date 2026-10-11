@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   beginPaneDrag,
+  finderDropDest,
   isDropInPlace,
   type DragInfo,
   type PgmacDesktop,
@@ -92,5 +93,36 @@ describe('isDropInPlace', () => {
 
   it('is false for an empty drop', () => {
     expect(isDropInPlace([], '/Users/me')).toBe(false);
+  });
+});
+
+describe('finderDropDest', () => {
+  const paths = (...p: string[]) => ({ kind: 'paths' as const, paths: p });
+  const pics = '/Users/me/Pics';
+
+  it('ignores a background drop of items already in the pane folder', () => {
+    expect(finderDropDest('mac', pics, null, paths(`${pics}/a.jpg`, `${pics}/b.jpg`))).toBeNull();
+  });
+
+  it('copies same-folder items dropped on a folder row into that folder', () => {
+    expect(finderDropDest('mac', pics, 'Album', paths(`${pics}/a.jpg`))).toBe(`${pics}/Album`);
+  });
+
+  it('copies a Finder drop from another folder, on the background or a row', () => {
+    expect(finderDropDest('mac', pics, null, paths('/Users/me/Desktop/c.jpg'))).toBe(pics);
+    expect(finderDropDest('mac', pics, 'Album', paths('/Users/me/Desktop/c.jpg'))).toBe(
+      `${pics}/Album`,
+    );
+  });
+
+  it('ignores items dropped on the row of the folder they already sit in', () => {
+    expect(finderDropDest('mac', pics, 'Album', paths(`${pics}/Album/c.jpg`))).toBeNull();
+  });
+
+  it('never ignores uploads or Android pane drops', () => {
+    expect(finderDropDest('mac', pics, null, { kind: 'upload', sources: [] })).toBe(pics);
+    expect(finderDropDest('android', '/sdcard/DCIM', null, paths('/sdcard/DCIM/a.jpg'))).toBe(
+      '/sdcard/DCIM',
+    );
   });
 });
