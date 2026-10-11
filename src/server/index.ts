@@ -31,9 +31,11 @@ try {
   }
   throw err;
 }
-announceListening(config.port, (process as { parentPort?: ParentPortLike }).parentPort);
 
 await app.clearStaleStaging();
+// After the cleanup, like the browser open below: a page opened sooner could start an upload
+// whose staging files the cleanup then deletes.
+announceListening(config.port, (process as { parentPort?: ParentPortLike }).parentPort);
 
 const url = `http://127.0.0.1:${dev ? 5173 : config.port}`;
 console.log(`PGMac Android Transfer is running at ${url}`);
