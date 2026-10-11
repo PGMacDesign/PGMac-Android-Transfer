@@ -5,7 +5,13 @@ import { fileURLToPath } from 'node:url';
 import open from 'open';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
-import { listenForForceStop, type ParentPortReceiver } from './parentPort.ts';
+import {
+  activeJobCount,
+  listenForForceStop,
+  listenForQuit,
+  stopOnSignal,
+  type QuitPort,
+} from './parentPort.ts';
 import { announceListening, type ParentPortLike } from './readiness.ts';
 import { openStateStore } from './stateStore.ts';
 import { forceStop } from './transfers/children.ts';
@@ -13,7 +19,7 @@ import { forceStop } from './transfers/children.ts';
 // Every way out of this process, including process.exit with transfers running, passes here;
 // only synchronous work is possible, which is all forceStop does.
 process.on('exit', forceStop);
-const parentPort = (process as { parentPort?: ParentPortLike & ParentPortReceiver }).parentPort;
+const parentPort = (process as { parentPort?: ParentPortLike & QuitPort }).parentPort;
 listenForForceStop(parentPort, { forceStop, exit: (code) => process.exit(code) });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -27,6 +33,11 @@ const app = await buildApp({
   webRoot: dev ? undefined : path.join(root, 'dist', 'web'),
   dev,
   onQuit: () => process.exit(0),
+});
+listenForQuit(parentPort, {
+  activeCount: () => activeJobCount(app.queue.jobs()),
+  shutdown: app.shutdown,
+  exit: (code) => process.exit(code),
 });
 
 try {
@@ -54,13 +65,10 @@ if (config.openBrowser && !dev) {
   open(url).catch(() => console.log(`Open ${url} in your browser.`));
 }
 
-let stopping = false;
-const stop = async () => {
-  if (stopping) process.exit(1);
-  stopping = true;
-  console.log('\nStopping: cancelling transfers and disconnecting…');
-  await app.shutdown();
-  process.exit(0);
-};
+const stop = stopOnSignal({
+  desktop: parentPort !== undefined,
+  shutdown: app.shutdown,
+  exit: (code) => process.exit(code),
+});
 process.on('SIGINT', () => void stop());
 process.on('SIGTERM', () => void stop());

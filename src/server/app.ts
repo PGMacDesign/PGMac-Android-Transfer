@@ -494,10 +494,10 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     return settings();
   });
 
-  let shuttingDown = false;
-  const shutdown = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+  // Shared so every quit path (POST /api/quit, a signal, the desktop app) waits for the same
+  // cleanup: a caller that got an early return could exit while transfers are still cancelling.
+  let stopped: Promise<void> | undefined;
+  const stop = async () => {
     clearInterval(macTimer);
     pairing.cancel();
     await session.end().catch(() => undefined);
@@ -510,6 +510,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     volumes.stop();
     await server.close();
   };
+  const shutdown = () => (stopped ??= stop());
 
   server.post('/api/quit', async (_req, reply: FastifyReply) => {
     reply.send({ ok: true });
