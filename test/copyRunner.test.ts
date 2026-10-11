@@ -147,6 +147,57 @@ describe('AdbRunner copy (Mac to Mac)', () => {
     await expect(done).rejects.toSatisfy(isOfflineError);
     expect(Date.now() - started).toBeLessThan(5000);
   });
+
+  it('aborts a stalled copy whose source share stopped answering', async () => {
+    const d = await tmp();
+    // A fake cp that hangs like a read from a dead share.
+    const bin = path.join(d, 'bin');
+    await mkdir(bin);
+    await writeFile(path.join(bin, 'cp'), '#!/bin/sh\nexec sleep 600\n', { mode: 0o755 });
+    const nas = path.join(d, 'nas');
+    await mkdir(nas);
+    await writeFile(path.join(nas, 'big.mov'), 'movie');
+    await mkdir(path.join(d, 'dest'));
+    const checked: string[] = [];
+    const r = new AdbRunner({
+      adb: new Adb(null),
+      serial: () => '',
+      android: {} as AndroidFs,
+      mac: new MacFs(d),
+      pollMs: 20,
+      stallMs: 100,
+      exitCapMs: 500,
+      volumes: {
+        volumeOf: (p) =>
+          p.startsWith(nas) ? { source: '//nas/x', mountPoint: nas, type: 'smbfs' } : null,
+        check: async (p) => {
+          checked.push(p);
+          return false;
+        },
+      },
+    });
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}:${oldPath}`;
+    try {
+      const started = Date.now();
+      const done = r.start(
+        {
+          direction: 'copy',
+          srcPath: path.join(nas, 'big.mov'),
+          isDir: false,
+          partialPath: path.join(d, 'dest', '.big.mov.pgmac-partial'),
+          finalPath: path.join(d, 'dest', 'big.mov'),
+          replace: false,
+        },
+        hooks(),
+      ).done;
+      await expect(done).rejects.toSatisfy(isOfflineError);
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(checked).toContain(nas);
+    } finally {
+      process.env.PATH = oldPath;
+    }
+  });
 });
 
 describe('AdbRunner cancel before the final rename', () => {

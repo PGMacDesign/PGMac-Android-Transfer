@@ -136,8 +136,13 @@ const destSideOf = (d: Direction): Side => (d === 'push' ? 'android' : 'mac');
 const srcSideOf = (d: Direction): Side => (d === 'pull' ? 'android' : 'mac');
 /** push and pull need the device; copy (Mac to Mac) doesn't. */
 const usesDevice = (d: Direction) => d !== 'copy';
-/** The Mac end of a job, which may be on a network volume. */
-const macPathOf = (j: Job) => (j.direction === 'push' ? j.srcPath : j.destDir);
+/** The Mac ends of a job, either of which may be on a network volume. */
+const macPathsOf = (j: Pick<Job, 'direction' | 'srcPath' | 'destDir'>): string[] =>
+  j.direction === 'push'
+    ? [j.srcPath]
+    : j.direction === 'pull'
+      ? [j.destDir]
+      : [j.srcPath, j.destDir];
 const under = (p: string, root: string) => p === root || p.startsWith(root + '/');
 
 /** What the queue needs from the volume monitor (see volumes.ts). */
@@ -215,22 +220,36 @@ export class TransferQueue {
 
   async plan(req: PlanRequest): Promise<PlanResponse> {
     if (req.from === 'finder') return this.planFinder(req);
-    if (!this.deps.isConnected()) throw noSession();
+    // A desktop-app Finder drop names real Mac paths, so it runs like a drag from the Mac
+    // pane: a push onto the phone, or a copy onto the Mac pane that needs no device.
+    const direction: Direction =
+      req.from === 'paths'
+        ? req.destSide === 'android'
+          ? 'push'
+          : 'copy'
+        : req.from === 'mac'
+          ? 'push'
+          : 'pull';
+    if (usesDevice(direction) && !this.deps.isConnected()) throw noSession();
     // Captured before any await: the probes below must all come from this device session.
     const sessionId = this.deps.sessionId();
-    const srcFs = this.deps.fs[req.from];
+    const srcFs = this.deps.fs[srcSideOf(direction)];
     if (!req.srcPaths.length) throw new HttpError(400, 'Nothing to transfer.', 'INVALID');
     const items: PlanItem[] = [];
     for (const srcPath of new Set(req.srcPaths)) {
+      // cp -R into its own subtree would keep copying what it just wrote.
+      if (direction === 'copy' && under(nameKey(req.destDir), nameKey(srcPath))) {
+        throw invalid(`“${baseName(srcPath)}” can't be copied into itself.`);
+      }
       const meta = await srcFs.stat(srcPath);
       if (!meta) throw notFound(`“${baseName(srcPath)}” no longer exists.`);
       items.push({ srcPath, name: baseName(srcPath), meta, files: meta.isDir ? 0 : 1 });
     }
     return this.finishPlan({
       kind: 'pane',
-      direction: req.from === 'mac' ? 'push' : 'pull',
+      direction,
       destDir: req.destDir,
-      reveal: !!req.reveal,
+      reveal: req.from !== 'paths' && !!req.reveal,
       items,
       sessionId,
     });
@@ -604,6 +623,7 @@ export class TransferQueue {
   /**
    * The only rule for whether a queued job may start: device jobs need the device of the
    * session they were planned in; copy jobs need nothing. Uploading jobs are never queued.
+   * Jobs with a Mac end on an offline volume wait (see refreshWaiting).
    */
   private canStart(e: Entry): boolean {
     if (e.job.status !== 'queued') return false;
@@ -619,15 +639,15 @@ export class TransferQueue {
     const vols = this.deps.volumes;
     for (const e of this.entries.values()) {
       if (e.job.status !== 'queued') continue;
-      const p = macPathOf(e.job);
-      const off = vols?.offlineFor(p) ?? null;
+      const paths = macPathsOf(e.job);
+      const off = paths.map((p) => vols?.offlineFor(p) ?? null).find((o) => o) ?? null;
       // Queued after the give-up (a Finder upload that finished late): the deadline belongs
       // to the volume, so it has already passed.
       if (off && this.now() >= off.giveUpAt) {
         this.finish(e.job.id, null, 'failed', `${off.name} was offline for 30 minutes`);
         continue;
       }
-      const hold = [...this.held].find((mp) => under(p, mp));
+      const hold = [...this.held].find((mp) => paths.some((p) => under(p, mp)));
       const name = off?.name ?? (hold ? baseName(hold) : null);
       if (e.job.waitingFor !== name) {
         e.job.waitingFor = name;
@@ -728,9 +748,11 @@ export class TransferQueue {
   private async attemptFailed(e: Entry, attempt: number, err: unknown) {
     const message = (err as Error)?.message || 'Transfer failed';
     const vols = this.deps.volumes;
-    const p = macPathOf(e.job);
-    if (vols?.volumeOf(p) && e.attempt === attempt) {
-      const gone = isOfflineError(err) || !(await vols.check(p).catch(() => true));
+    const shared = macPathsOf(e.job).filter((p) => vols?.volumeOf(p));
+    if (vols && shared.length && e.attempt === attempt) {
+      const gone =
+        isOfflineError(err) ||
+        (await Promise.all(shared.map((p) => vols.check(p).catch(() => true)))).includes(false);
       if (e.attempt !== attempt || e.job.status !== 'running') return;
       if (gone) {
         this.pauseForVolume(e);
@@ -773,7 +795,9 @@ export class TransferQueue {
     if (ev.type === 'offline') {
       for (const id of [...this.running]) {
         const e = this.entries.get(id);
-        if (!e || e.committing || !under(macPathOf(e.job), ev.mountPoint)) continue;
+        if (!e || e.committing || !macPathsOf(e.job).some((p) => under(p, ev.mountPoint))) {
+          continue;
+        }
         if (e.handle) void this.teardown(e, e.handle);
         this.pauseForVolume(e);
       }
@@ -782,17 +806,19 @@ export class TransferQueue {
       for (const e of this.entries.values()) {
         const j = e.job;
         if (TERMINAL.has(j.status) && !(j.status === 'failed' && j.retryable)) continue;
-        if (j.direction === 'push') j.srcPath = move(j.srcPath);
-        else j.destDir = move(j.destDir);
+        // A copy has both ends on the Mac; a Finder copy's source is local staging.
+        if (j.direction !== 'pull') j.srcPath = move(j.srcPath);
+        if (j.direction !== 'push') j.destDir = move(j.destDir);
         this.emitJob(j.id);
       }
       for (const plan of this.plans.values()) {
         if (plan.direction !== 'push') plan.destDir = move(plan.destDir);
-        for (const it of plan.items) if (plan.direction === 'push') it.srcPath = move(it.srcPath);
+        for (const it of plan.items) if (plan.direction !== 'pull') it.srcPath = move(it.srcPath);
       }
     } else if (ev.type === 'gaveUp') {
       for (const e of this.entries.values()) {
-        if (e.job.status === 'queued' && under(macPathOf(e.job), ev.mountPoint)) {
+        const onShare = macPathsOf(e.job).some((p) => under(p, ev.mountPoint));
+        if (e.job.status === 'queued' && onShare) {
           this.finish(e.job.id, null, 'failed', `${ev.name} was offline for 30 minutes`);
         }
       }
@@ -894,7 +920,10 @@ export class TransferQueue {
     if (!e.job.retryable) {
       throw new HttpError(409, "This transfer can't be retried. Drop the files again.", 'CONFLICT');
     }
-    const offline = this.deps.volumes?.offlineFor(macPathOf(e.job));
+    const vols = this.deps.volumes;
+    const offline = macPathsOf(e.job)
+      .map((p) => vols?.offlineFor(p))
+      .find((o) => o);
     if (offline) {
       throw new HttpError(
         409,

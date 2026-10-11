@@ -1,6 +1,9 @@
 import type { FinderItem } from '../shared/protocol.ts';
 
-/** macOS metadata that Finder drags along; it would only clutter the phone. */
+/**
+ * macOS metadata that Finder drags along; it would only clutter the phone. Only uploads skip
+ * it: a real-path drop copies a folder as it is, like a drag from the Mac pane.
+ */
 export function isJunk(name: string): boolean {
   return name === '.DS_Store' || name.startsWith('._');
 }
@@ -39,11 +42,58 @@ export interface FinderDrop {
 
 export const isFinderDrag = (types: readonly string[]): boolean => types.includes('Files');
 
+/** The parts of a DataTransfer a drop handler reads (fakeable in tests). */
+export interface DropItemLike {
+  kind: string;
+  getAsFile(): File | null;
+  webkitGetAsEntry(): unknown;
+}
+export interface DropDataLike {
+  items: ArrayLike<DropItemLike>;
+}
+
+/**
+ * A drop as captured inside its event. `paths`: the desktop app knows every dropped item's
+ * real path, so it copies from there like a drag from the Mac pane. `upload`: a browser (or an
+ * item with no file on disk) only hands over the bytes, which are uploaded and staged.
+ */
+export type CapturedDrop =
+  { kind: 'paths'; paths: string[] } | { kind: 'upload'; sources: DropSource[] };
+
+/**
+ * Must run inside the drop event, like captureDropSources. A dropped folder is one path; its
+ * contents are copied as they are, `.DS_Store` and `._*` included, as for a Mac pane drag.
+ * If any item has no path (some apps drag items that aren't files on disk), the whole drop is
+ * uploaded instead, so one drop never splits into two kinds of job.
+ */
+export function captureDrop(dt: DropDataLike, pathOf: ((f: File) => string) | null): CapturedDrop {
+  const paths = pathOf ? realPaths(dt, pathOf) : null;
+  if (paths) return { kind: 'paths', paths };
+  return { kind: 'upload', sources: captureDropSources(dt) };
+}
+
+function realPaths(dt: DropDataLike, pathOf: (f: File) => string): string[] | null {
+  const out: string[] = [];
+  for (const it of Array.from(dt.items)) {
+    if (it.kind !== 'file') continue;
+    const file = it.getAsFile();
+    let p = '';
+    try {
+      p = file ? pathOf(file) : '';
+    } catch {
+      // Treated like a missing path: the upload path still works for it.
+    }
+    if (!p) return null;
+    out.push(p);
+  }
+  return out.length ? out : null;
+}
+
 /**
  * Must run inside the drop event: browsers empty the DataTransfer as soon as the handler
  * returns, so every entry is taken before any await.
  */
-export function captureDropSources(dt: DataTransfer): DropSource[] {
+export function captureDropSources(dt: DropDataLike): DropSource[] {
   const out: DropSource[] = [];
   for (const it of Array.from(dt.items)) {
     if (it.kind !== 'file') continue;

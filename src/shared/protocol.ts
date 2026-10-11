@@ -107,7 +107,11 @@ export type Direction = 'push' | 'pull' | 'copy';
  */
 export type JobStatus = 'uploading' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
-/** pane = dragged between the panes; finder = dropped from Finder and uploaded by the page. */
+/**
+ * pane = copied from a real path: dragged between the panes, or dropped from Finder in the
+ * desktop app (which knows the dropped files' paths). finder = dropped from Finder in a
+ * browser and uploaded by the page.
+ */
 export type JobOrigin = 'pane' | 'finder';
 
 export interface Job {
@@ -176,7 +180,12 @@ export type PlanRequest =
       /** Show in Finder: reveal the copied items once every job in the batch has finished. */
       reveal?: boolean;
     }
-  | { from: 'finder'; destSide: Side; destDir: string; items: FinderItem[] };
+  | { from: 'finder'; destSide: Side; destDir: string; items: FinderItem[] }
+  /**
+   * A Finder drop in the desktop app: the dropped items' real Mac paths. Runs like a drag
+   * from the Mac pane (a push, or a copy onto the Mac pane), with nothing uploaded or staged.
+   */
+  | { from: 'paths'; destSide: Side; destDir: string; srcPaths: string[] };
 
 export interface PlanResponse {
   batchId: string;
@@ -298,7 +307,7 @@ export type ServerMessage =
 // POST /api/fs/:side/delete  {paths, permanent?} -> { ok: true }
 //      Mac deletes go to the Trash; `permanent: true` (Mac only) skips it, for NO_TRASH.
 // POST /api/transfers/plan   PlanRequest  -> PlanResponse
-//      (Finder batches need a session only when destSide is android)
+//      (Finder and paths batches need a session only when destSide is android)
 // POST /api/transfers/commit CommitRequest -> CommitResponse
 // POST /api/transfers/:id/cancel          -> { ok: true }
 // POST /api/transfers/:id/retry           -> { ok: true }
