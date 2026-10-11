@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { stat as fsStat } from 'node:fs/promises';
+import path from 'node:path';
 import { HttpError, busy, invalid, noSession, notFound } from '../errors.ts';
 import { baseName, joinPosix, pathsOverlap, validateName } from '../fs/paths.ts';
 import type { SideFs } from '../fs/types.ts';
@@ -145,6 +147,41 @@ const macPathsOf = (j: Pick<Job, 'direction' | 'srcPath' | 'destDir'>): string[]
       : [j.srcPath, j.destDir];
 const under = (p: string, root: string) => p === root || p.startsWith(root + '/');
 
+/** The direction a plan request runs in. */
+export function planDirection(
+  req: { from: 'mac' } | { from: 'android' } | { from: 'finder' | 'paths'; destSide: Side },
+): Direction {
+  if (req.from === 'mac') return 'push';
+  if (req.from === 'android') return 'pull';
+  // Finder drops (staged uploads or real paths) come from the Mac: a push onto the phone,
+  // or a copy onto the Mac pane that needs no device.
+  return req.destSide === 'android' ? 'push' : 'copy';
+}
+
+/**
+ * Whether the Mac volume holding `p` tells names apart by case. Looking `p` up with one
+ * component's case swapped finds the same file on a case-insensitive volume (the macOS
+ * default) and nothing, or another file, on a case-sensitive one. Anything that can't be
+ * probed counts as case-insensitive, the default.
+ */
+export async function probeCaseSensitive(p: string): Promise<boolean> {
+  const parts = p.split('/');
+  for (let i = parts.length - 1; i > 0; i--) {
+    const name = parts[i]!;
+    const swapped = name === name.toLowerCase() ? name.toUpperCase() : name.toLowerCase();
+    if (swapped === name) continue;
+    const variant = [...parts.slice(0, i), swapped, ...parts.slice(i + 1)].join('/');
+    try {
+      const a = await fsStat(p, { bigint: true });
+      const b = await fsStat(variant, { bigint: true }).catch(() => null);
+      return !b || a.dev !== b.dev || a.ino !== b.ino;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 /** What the queue needs from the volume monitor (see volumes.ts). */
 export interface QueueVolumes {
   volumeOf(p: string): Mount | null;
@@ -170,6 +207,8 @@ export interface QueueDeps {
   uploadIdleMs?: number;
   /** Network volume awareness; without it every Mac path counts as local. */
   volumes?: QueueVolumes;
+  /** Whether the Mac volume holding a path is case-sensitive (defaults to probeCaseSensitive). */
+  caseSensitive?: (macPath: string) => Promise<boolean>;
 }
 
 /**
@@ -220,16 +259,8 @@ export class TransferQueue {
 
   async plan(req: PlanRequest): Promise<PlanResponse> {
     if (req.from === 'finder') return this.planFinder(req);
-    // A desktop-app Finder drop names real Mac paths, so it runs like a drag from the Mac
-    // pane: a push onto the phone, or a copy onto the Mac pane that needs no device.
-    const direction: Direction =
-      req.from === 'paths'
-        ? req.destSide === 'android'
-          ? 'push'
-          : 'copy'
-        : req.from === 'mac'
-          ? 'push'
-          : 'pull';
+    // A desktop-app Finder drop names real Mac paths, so it runs like a drag from the Mac pane.
+    const direction = planDirection(req);
     if (usesDevice(direction) && !this.deps.isConnected()) throw noSession();
     // Captured before any await: the probes below must all come from this device session.
     const sessionId = this.deps.sessionId();
@@ -238,7 +269,7 @@ export class TransferQueue {
     const items: PlanItem[] = [];
     for (const srcPath of new Set(req.srcPaths)) {
       // cp -R into its own subtree would keep copying what it just wrote.
-      if (direction === 'copy' && under(nameKey(req.destDir), nameKey(srcPath))) {
+      if (direction === 'copy' && (await this.copiesIntoItself(srcPath, req.destDir))) {
         throw invalid(`“${baseName(srcPath)}” can't be copied into itself.`);
       }
       const meta = await srcFs.stat(srcPath);
@@ -256,7 +287,7 @@ export class TransferQueue {
   }
 
   private async planFinder(req: Extract<PlanRequest, { from: 'finder' }>): Promise<PlanResponse> {
-    const direction: Direction = req.destSide === 'android' ? 'push' : 'copy';
+    const direction = planDirection(req);
     if (usesDevice(direction) && !this.deps.isConnected()) throw noSession();
     const sessionId = this.deps.sessionId();
     const staging = this.deps.staging;
@@ -291,6 +322,21 @@ export class TransferQueue {
       items,
       sessionId,
     });
+  }
+
+  /** Whether `destDir` is `src` or inside it, ignoring case only where the volume does. */
+  private async copiesIntoItself(src: string, destDir: string): Promise<boolean> {
+    const inside = (foldCase: boolean) => {
+      const key = (p: string) => {
+        const k = path.posix.resolve(p).normalize('NFC');
+        return foldCase ? k.toLowerCase() : k;
+      };
+      const rel = path.posix.relative(key(src), key(destDir));
+      return rel !== '..' && !rel.startsWith('../');
+    };
+    if (inside(false)) return true;
+    // Only a match that needs case folding depends on the volume, so only it is probed.
+    return inside(true) && !(await (this.deps.caseSensitive ?? probeCaseSensitive)(src));
   }
 
   private async finishPlan(

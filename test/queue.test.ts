@@ -1,9 +1,14 @@
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEVICE_LOST,
   NO_STAGING_SPACE,
   UPLOAD_INTERRUPTED,
   TransferQueue,
+  planDirection,
+  probeCaseSensitive,
 } from '../src/server/transfers/queue.ts';
 import { FakeRunner, FakeStaging, FakeVolumes, MemoryFs, flush, recordingHub } from './helpers.ts';
 import type { Job } from '../src/shared/protocol.ts';
@@ -12,7 +17,14 @@ import { HttpError } from '../src/server/errors.ts';
 const file = (size: number) => ({ isDir: false, size, mtimeMs: 1 });
 const dir = { isDir: true, size: 0, mtimeMs: 1 };
 
-function setup(opts: { max?: number; macFiles?: number; volumes?: FakeVolumes } = {}) {
+function setup(
+  opts: {
+    max?: number;
+    macFiles?: number;
+    volumes?: FakeVolumes;
+    caseSensitive?: (p: string) => Promise<boolean>;
+  } = {},
+) {
   const n = opts.macFiles ?? 5;
   const macEntries: Record<string, ReturnType<typeof file> | typeof dir> = { '/m': dir };
   for (let i = 0; i < n; i++) macEntries[`/m/f${i}.txt`] = file(100);
@@ -34,6 +46,7 @@ function setup(opts: { max?: number; macFiles?: number; volumes?: FakeVolumes } 
     staging,
     reveal: (paths) => revealed.push(paths),
     volumes: opts.volumes,
+    caseSensitive: opts.caseSensitive ?? (async () => false),
   });
   const push = async (names: string[], decisions = {}) => {
     const plan = await queue.plan({
@@ -1065,9 +1078,39 @@ describe('Network volumes', () => {
   });
 });
 
+describe('probeCaseSensitive', () => {
+  it('agrees with whether a differently cased lookup finds the same folder', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pgmac-case-'));
+    try {
+      const folder = path.join(root, 'Album');
+      mkdirSync(path.join(folder, '123'), { recursive: true });
+      const insensitive = existsSync(path.join(root, 'ALBUM'));
+      expect(await probeCaseSensitive(folder)).toBe(!insensitive);
+      // A last component without letters is probed through the nearest one that has them.
+      expect(await probeCaseSensitive(path.join(folder, '123'))).toBe(!insensitive);
+      expect(await probeCaseSensitive(path.join(root, 'missing'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('planDirection', () => {
+  it.each([
+    [{ from: 'mac' }, 'push'],
+    [{ from: 'android' }, 'pull'],
+    [{ from: 'finder', destSide: 'android' }, 'push'],
+    [{ from: 'finder', destSide: 'mac' }, 'copy'],
+    [{ from: 'paths', destSide: 'android' }, 'push'],
+    [{ from: 'paths', destSide: 'mac' }, 'copy'],
+  ] as const)('maps %o to %s', (req, direction) => {
+    expect(planDirection(req)).toBe(direction);
+  });
+});
+
 describe('Finder drops with real paths', () => {
-  const setupPaths = (volumes?: FakeVolumes) => {
-    const t = setup({ max: 5, volumes });
+  const setupPaths = (volumes?: FakeVolumes, caseSensitive?: (p: string) => Promise<boolean>) => {
+    const t = setup({ max: 5, volumes, caseSensitive });
     t.mac.files.set('/f', dir);
     t.mac.files.set('/f/Album', dir);
     t.mac.files.set('/f/x.bin', file(10));
@@ -1193,6 +1236,40 @@ describe('Finder drops with real paths', () => {
     await expect(
       t.queue.plan({ from: 'paths', destSide: 'mac', destDir: '/f/Album', srcPaths: ['/f/Album'] }),
     ).rejects.toThrow(/into itself/);
+  });
+
+  const copyInto = (t: ReturnType<typeof setupPaths>, srcPath: string, destDir: string) =>
+    t.queue.plan({ from: 'paths', destSide: 'mac', destDir, srcPaths: [srcPath] });
+
+  it('refuses to copy a folder into its own subfolder, however the paths are written', async () => {
+    const t = setupPaths();
+    t.mac.files.set('/f/Album/Sub', dir);
+    await expect(copyInto(t, '/f/Album', '/f/Album/Sub')).rejects.toThrow(/into itself/);
+    await expect(copyInto(t, '/f/Album/', '/f/Album/Sub/')).rejects.toThrow(/into itself/);
+    await expect(copyInto(t, '/f/Album', '/f/Album/')).rejects.toThrow(/into itself/);
+    // The default macOS volume ignores case, so these name the same folders.
+    await expect(copyInto(t, '/f/Album', '/f/album/sub')).rejects.toThrow(/into itself/);
+    await expect(copyInto(t, '/f/Album', '/F/ALBUM')).rejects.toThrow(/into itself/);
+  });
+
+  it('allows a copy into a folder that only shares a name prefix', async () => {
+    const t = setupPaths();
+    t.mac.files.set('/f/Album 2', dir);
+    t.mac.files.set('/f/Album..', dir);
+    await expect(copyInto(t, '/f/Album', '/f/Album 2')).resolves.toMatchObject({ itemCount: 1 });
+    await expect(copyInto(t, '/f/Album', '/f/Album..')).resolves.toMatchObject({ itemCount: 1 });
+  });
+
+  it('allows a copy into a differently cased folder on a case-sensitive volume', async () => {
+    const probed: string[] = [];
+    const t = setupPaths(undefined, async (p) => (probed.push(p), true));
+    t.mac.files.set('/f/album', dir);
+    t.mac.files.set('/f/Album/Sub', dir);
+    await expect(copyInto(t, '/f/Album', '/f/album')).resolves.toMatchObject({ itemCount: 1 });
+    expect(probed).toEqual(['/f/Album']);
+    // An exact match is refused without asking the volume.
+    await expect(copyInto(t, '/f/Album', '/f/Album/Sub')).rejects.toThrow(/into itself/);
+    expect(probed).toEqual(['/f/Album']);
   });
 
   it('waits for an offline source share, then starts over when it returns', async () => {
