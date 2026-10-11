@@ -34,8 +34,8 @@ Fix three small non-blocking issues reviewers found in the Electron shell and it
 
 ## Out of scope
 
-- Any behaviour change beyond these two fixes.
+- Any behaviour change beyond these three fixes.
 
 ## Size
 
-S: two small fixes and their tests.
+S: three small fixes and their tests.
