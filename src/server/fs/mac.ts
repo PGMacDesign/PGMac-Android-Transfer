@@ -37,23 +37,38 @@ function mapFsError(err: unknown, p: string): never {
   throw new HttpError(500, (err as Error).message);
 }
 
-async function moveToTrash(paths: string[]): Promise<void> {
-  // macOS 15+ ships /usr/bin/trash; older versions go through Finder.
+/** Moves paths to the Trash; the desktop app supplies one that runs in Electron's main process. */
+export type TrashFn = (paths: string[]) => Promise<void>;
+
+/** How MacFs reaches the Trash. Everything but `trash` is replaced only by tests. */
+export interface TrashDeps {
+  trash?: TrashFn;
+  access?: (p: string, mode: number) => Promise<void>;
+  run?: (cmd: string, args: string[], opts: { timeout: number }) => Promise<unknown>;
+  platform?: NodeJS.Platform;
+}
+
+export async function moveToTrash(paths: string[], deps: TrashDeps = {}): Promise<void> {
+  const exec = deps.run ?? run;
+  // macOS 15+ ships /usr/bin/trash. Only its absence falls back; a CLI that ran and failed
+  // reports its own error.
   try {
-    await access('/usr/bin/trash', constants.X_OK);
-    await run('/usr/bin/trash', paths, { timeout: 60_000 });
+    await (deps.access ?? access)('/usr/bin/trash', constants.X_OK);
+    await exec('/usr/bin/trash', paths, { timeout: 60_000 });
     return;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
-  if (process.platform === 'darwin') {
+  // The desktop app's own route, so the signed app never drives Finder through Apple Events.
+  if (deps.trash) return deps.trash(paths);
+  if ((deps.platform ?? process.platform) === 'darwin') {
     const list = paths.map((p) => `POSIX file ${JSON.stringify(p)}`).join(', ');
-    await run('osascript', ['-e', `tell application "Finder" to delete {${list}}`], {
+    await exec('osascript', ['-e', `tell application "Finder" to delete {${list}}`], {
       timeout: 60_000,
     });
     return;
   }
-  await run('gio', ['trash', '--', ...paths], { timeout: 60_000 });
+  await exec('gio', ['trash', '--', ...paths], { timeout: 60_000 });
 }
 
 /** What MacFs needs from the volume monitor; the default treats every path as local. */
@@ -88,9 +103,11 @@ export class MacFs implements SideFs {
   private readonly parked = new Set<{ final: string; backup: string; active: boolean }>();
   /** Restores run one at a time so each sees every move noted before it. */
   private restoring: Promise<void> = Promise.resolve();
-  constructor(home: string, vol: VolumeGuard = LOCAL) {
+  private readonly trashDeps: TrashDeps;
+  constructor(home: string, vol: VolumeGuard = LOCAL, trash: TrashDeps = {}) {
     this.home = home;
     this.vol = vol;
+    this.trashDeps = trash;
   }
 
   private io<T>(p: string, fn: () => Promise<T>, timeoutMs?: number): Promise<T> {
@@ -190,13 +207,16 @@ export class MacFs implements SideFs {
       if (off) throw offlineError(off.name);
     }
     try {
-      await moveToTrash(paths);
+      await moveToTrash(paths, this.trashDeps);
     } catch (err) {
       const shared = paths.find((p) => this.vol.volumeOf(p));
       if (shared && !(await this.vol.check(shared))) {
         throw offlineError(this.vol.offlineFor(shared)?.name ?? baseName(shared));
       }
       // Shares and external drives often have no Trash; the UI offers a permanent delete.
+      // None of the trash routes say why they failed in a form worth parsing (Finder's
+      // AppleScript error, shell.trashItem's localized NSFileManager message relayed as text),
+      // so any failure on such a volume counts as no Trash, whichever route ran.
       if (shared || paths.some((p) => p.startsWith('/Volumes/'))) {
         const what = paths.length === 1 ? `“${baseName(paths[0]!)}”` : `${paths.length} items`;
         throw new HttpError(409, `${what} can't be moved to the Trash on this volume.`, 'NO_TRASH');

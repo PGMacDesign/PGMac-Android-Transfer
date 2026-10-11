@@ -113,3 +113,64 @@ export function stopOnSignal(opts: {
     opts.exit(0);
   };
 }
+
+/** The server asks the desktop app to move `paths` to the Trash, in order. */
+export interface TrashRequest {
+  type: 'trash';
+  id: number;
+  paths: string[];
+}
+
+/** The desktop app's answer to a `TrashRequest`; `error` is set when a path failed. */
+export interface TrashReply {
+  type: 'trashResult';
+  id: number;
+  error?: string;
+}
+
+/** How long a trash request waits for its reply, as long as the trash CLI gets. */
+export const TRASH_TIMEOUT_MS = 60_000;
+
+/** Electron's `process.parentPort` as the trash requests use it. */
+export interface TrashPort extends ParentPortReceiver {
+  postMessage(message: TrashRequest): void;
+}
+
+/**
+ * A trash function that has the desktop app's main process do the work (with
+ * `shell.trashItem`), for MacFs to use when there is no `/usr/bin/trash`. Each call settles
+ * once: on its reply, or rejected at `TRASH_TIMEOUT_MS`, after which a late reply is ignored.
+ */
+export function trashThroughParent(parentPort: TrashPort): (paths: string[]) => Promise<void> {
+  const pending = new Map<
+    number,
+    { resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout }
+  >();
+  let nextId = 1;
+  parentPort.on('message', (event) => {
+    if (typeOf(event) !== 'trashResult') return;
+    const reply = event.data as Partial<TrashReply>;
+    const entry = typeof reply.id === 'number' ? pending.get(reply.id) : undefined;
+    if (!entry) return;
+    pending.delete(reply.id!);
+    clearTimeout(entry.timer);
+    if (reply.error === undefined) entry.resolve();
+    else entry.reject(new Error(String(reply.error)));
+  });
+  return (paths) =>
+    new Promise<void>((resolve, reject) => {
+      const id = nextId++;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error('The app did not finish moving the items to the Trash in time.'));
+      }, TRASH_TIMEOUT_MS);
+      pending.set(id, { resolve, reject, timer });
+      try {
+        parentPort.postMessage({ type: 'trash', id, paths });
+      } catch (err) {
+        pending.delete(id);
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+}

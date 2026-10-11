@@ -27,6 +27,7 @@ import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
 import { isExternalUrl } from './links.ts';
 import { appMenuTemplate } from './menu.ts';
 import { QuitController, quitPrompt, QUIT_BUTTON } from './quit.ts';
+import { trashHandler } from './trash.ts';
 import { loadWindowState, saveWindowState, windowStatePath } from './windowState.ts';
 
 const serverEntry = path.join(import.meta.dirname, '..', 'src', 'server', 'index.ts');
@@ -166,8 +167,18 @@ async function startServer(): Promise<void> {
     });
   }
 
+  const onTrash = trashHandler({
+    trashItem: (p) => shell.trashItem(p),
+    reply: (message) => {
+      // A server that exited mid-request has no one left to answer.
+      if (server !== child || !serverRunning) return;
+      child.postMessage(message);
+    },
+  });
+
   let listening = false;
   child.on('message', (message: unknown) => {
+    if (onTrash(message)) return;
     quitter.onServerMessage(message);
     if (listening || !isListeningMessage(message, port)) return;
     listening = true;
