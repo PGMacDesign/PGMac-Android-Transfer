@@ -1,0 +1,54 @@
+// Packaging uses electron-builder rather than Electron Forge. The server's .ts sources and the
+// prebuilt UI ship as-is, so there is no bundling step for Forge's plugin pipeline to drive;
+// what's needed is a declarative file allowlist, devDependency pruning, a universal macOS
+// build and a DMG, all of which electron-builder does from this one file. It wraps
+// @electron/osx-sign and @electron/notarize, so signing and notarization are later config
+// additions (mac.identity, mac.notarize), not a tool change.
+//
+// The universal build works because every production dependency is pure JavaScript: the arm64
+// and x64 app.asar files are identical, so they merge without per-arch exceptions.
+import type { Configuration } from 'electron-builder';
+
+const config: Configuration = {
+  appId: 'com.pgmacdesign.androidtransfer',
+  productName: 'PGMac Android Transfer',
+  // Version, and the `main` entry, come from package.json. Not setting buildVersion or
+  // extraMetadata keeps the bundle's version and app.getVersion() on that single source.
+  directories: {
+    output: 'release',
+    buildResources: 'build',
+  },
+  // An allowlist, so a new top-level directory stays out of the app until it's added here.
+  // electron-builder adds the production dependencies under node_modules on its own and
+  // leaves devDependencies out; the negations below apply to those files too.
+  files: [
+    'package.json',
+    'electron/**/*',
+    'src/server/**/*',
+    'src/shared/**/*',
+    'dist/web/**/*',
+    '!**/*.map',
+    '!**/.env',
+    '!**/.env.*',
+    // Dependencies publish their docs, tests and benchmarks; nothing loads them at runtime.
+    '!**/node_modules/{*,@*/*}/{docs,test,tests,__tests__,benchmark,benchmarks}{,/**/*}',
+  ],
+  asar: true,
+  mac: {
+    category: 'public.app-category.utilities',
+    // A 1024x1024 PNG; electron-builder converts it to .icns at build time.
+    icon: 'build/icon.png',
+    target: [{ target: 'dmg', arch: ['universal'] }],
+    // Unsigned until the signing work: don't pick up whatever identity is in the keychain.
+    identity: null,
+  },
+  dmg: {
+    // The usual drag-to-Applications layout: the app on the left, the link on the right.
+    contents: [
+      { x: 130, y: 220 },
+      { x: 410, y: 220, type: 'link', path: '/Applications' },
+    ],
+  },
+};
+
+export default config;

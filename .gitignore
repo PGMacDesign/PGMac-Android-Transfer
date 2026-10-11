@@ -9,3 +9,6 @@ coverage/
 .env.*
 !.env.example
 .claude/
+
+# Packaged app (npm run make)
+release/

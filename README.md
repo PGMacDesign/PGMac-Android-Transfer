@@ -39,6 +39,16 @@ npm start
 
 `npm run app` builds the UI and opens it in its own window instead of a browser tab. It runs the same server on a free port of its own, so it can run alongside `npm start`, and stops the server when you quit.
 
+### Build the desktop app
+
+```sh
+npm run make
+```
+
+This builds the UI and packages it, with the server and its production dependencies, into a universal (Apple silicon and Intel) app. The DMG lands in `release/`, named `PGMac Android Transfer-<version>-universal.dmg`. Open it and drag the app to Applications. It needs macOS to build.
+
+The app is unsigned for now, so macOS won't open it with a double-click the first time. Right-click it in Applications and choose **Open**, then **Open** again in the dialog (on recent macOS versions you may instead need **Open Anyway** under **System Settings > Privacy & Security**). Later launches open normally.
+
 ### Connecting a phone
 
 1. On the phone, open **Settings > Developer options > Wireless debugging** and turn it on.
