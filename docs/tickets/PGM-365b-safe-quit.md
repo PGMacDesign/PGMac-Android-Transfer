@@ -14,7 +14,7 @@ Cmd+Q (or Quit from the menu) never silently kills transfers. With transfers run
 
 - `buildApp` (`src/server/app.ts`) returns `shutdown()`, which cancels pairing, ends the session, cancels every job (`queue.cancelAll()`), stops the volume monitor and closes the server. `POST /api/quit` and SIGINT/SIGTERM in `src/server/index.ts` call it.
 - The server runs in a `utilityProcess` forked by `electron/main.ts` (PGM-358); main and the server can talk over `process.parentPort` / the `UtilityProcess` message channel.
-- PGM-365c added a registry of the server's transfer child processes, `forceStop()` (synchronous kill of registered children plus removal of their partials), a `{ type: 'forceStop' }` parent-port message that runs it and exits, and a `process.on('exit')` hook that runs it. Use these for every forced path. Never find processes by scanning `ps` or matching command lines: that risks killing the shared adb daemon and is what an earlier attempt failed review on.
+- PGM-365c added a registry of the server's transfer child processes, `forceStop()` (synchronous kill of registered children; it does no file cleanup), a `{ type: 'forceStop' }` parent-port message that runs it and exits, and a `process.on('exit')` hook that runs it. Use these for every forced path. Never find processes by scanning `ps` or matching command lines: that risks killing the shared adb daemon and is what an earlier attempt failed review on.
 - `docs/DESIGN.md` Invariants, "Device session" 5 (End Session leaves nothing running) and "Transfer job lifecycle" 4 (originals never destroyed, partials removed).
 
 ## Acceptance criteria
@@ -29,7 +29,7 @@ Cmd+Q (or Quit from the menu) never silently kills transfers. With transfers run
 
 ## Invariants
 
-- **Quit leaves nothing running** (Device session 5): after a confirmed quit, every job is terminal, no adb or `cp` child process from the server is alive, and no `.pgmac-partial` file remains. Test it with the server's message handler driven directly: active fake jobs, a quit request, then assert all cancelled, partials removed and no live child.
+- **Quit leaves nothing running** (Device session 5): after a confirmed quit that gets `shutdownDone`, every job is terminal, no adb or `cp` child process from the server is alive, and no `.pgmac-partial` file remains. Test it with the server's message handler driven directly: active fake jobs, a quit request, then assert all cancelled, partials removed and no live child. A forced stop after the 8.5-second timeout kills every transfer process but may leave hidden partial files (`docs/DESIGN.md` Device session 5); don't add file cleanup to that path.
 - **Quit always finishes (liveness)**: a confirmed quit calls `quit()` within 10 seconds of confirmation even if the server never replies and never exits. Test with fake timers and a server that ignores every message: `forceStop` is sent at 8.5 s, `kill` and `quit` by 9.5 s.
 - **Cancel means nothing changes**: choosing Cancel sends no message to the server and never calls `kill` or `quit`. Test the Cancel branch to the end.
 - **A signal never waits on the dialog**: a signal while the dialog is open aborts it and quits within the same 10-second cap.
