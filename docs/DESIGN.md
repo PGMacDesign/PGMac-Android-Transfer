@@ -26,6 +26,8 @@ ADB over WiFi (Android 11+ Wireless Debugging). The backend shells out to the `a
 
 `adb` resolution order: `ADB_PATH` env, `PATH`, Homebrew (`/opt/homebrew/bin`, then `/usr/local/bin`), `$ANDROID_HOME/platform-tools`, `$ANDROID_SDK_ROOT/platform-tools`, `~/Library/Android/sdk/platform-tools`, `~/Android/Sdk/platform-tools`. The Homebrew folders are checked explicitly because an app launched from the Dock or Finder gets launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which leaves them out. If none resolve, the UI shows an install hint (`brew install android-platform-tools`).
 
+The packaged app needs macOS Local Network permission for discovery and pairing. macOS attributes the adb daemon and the `dns-sd` fallback to the app that starts them, so the app's Info.plist declares `NSLocalNetworkUsageDescription` and the `_adb-tls-connect._tcp` and `_adb-tls-pairing._tcp` Bonjour types; without them macOS denies access silently and QR pairing times out.
+
 ## Session flow
 
 **Start Session**

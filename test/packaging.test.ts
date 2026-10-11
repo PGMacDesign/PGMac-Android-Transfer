@@ -259,4 +259,26 @@ describe('packaging config', () => {
     expect(config.mac?.identity).toBeNull();
     expect(config.mac?.icon).toBe('build/icon.png');
   });
+
+  it('declares Local Network, Bonjour and folder usage in Info.plist', () => {
+    const info = config.mac?.extendInfo as Record<string, unknown>;
+    expect(info).toEqual({
+      NSLocalNetworkUsageDescription:
+        'PGMac Android Transfer finds and connects to your phone over your WiFi network.',
+      NSBonjourServices: ['_adb-tls-connect._tcp', '_adb-tls-pairing._tcp'],
+      NSDesktopFolderUsageDescription:
+        'PGMac Android Transfer lets you browse your Desktop and copy files to and from your phone.',
+      NSDocumentsFolderUsageDescription:
+        'PGMac Android Transfer lets you browse your Documents folder and copy files to and from your phone.',
+      NSDownloadsFolderUsageDescription:
+        'PGMac Android Transfer lets you browse your Downloads folder and copy files to and from your phone.',
+      NSNetworkVolumesUsageDescription:
+        'PGMac Android Transfer lets you browse network drives and copy files to and from your phone.',
+      NSRemovableVolumesUsageDescription:
+        'PGMac Android Transfer lets you browse external drives and copy files to and from your phone.',
+    });
+    // The two service types adb advertises for wireless debugging, and no others: a missing one
+    // stays invisible to discovery even after the user allows Local Network access.
+    expect(info.NSBonjourServices).toEqual(['_adb-tls-connect._tcp', '_adb-tls-pairing._tcp']);
+  });
 });
