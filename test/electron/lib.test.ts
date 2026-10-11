@@ -5,6 +5,7 @@ import {
   OutputTail,
   START_FAILED_HEADING,
   chooseFileHandler,
+  exitOutput,
   failurePage,
   isListeningMessage,
   pickFreePort,
@@ -139,6 +140,21 @@ describe('OutputTail', () => {
     const tail = new OutputTail(3);
     tail.write('stderr', 'a\nb\nc\nd\ne\n');
     expect(tail.lines()).toEqual(['c', 'd', 'e']);
+  });
+});
+
+describe('exitOutput', () => {
+  it('keeps the last 50 output lines and puts the exit code on a line of its own', () => {
+    const tail = new OutputTail();
+    for (let i = 1; i <= 60; i++) tail.write('stdout', `line ${i}\n`);
+    const lines = exitOutput(tail.lines(), 1, tail.limit);
+    expect(lines).toHaveLength(51);
+    expect(lines.slice(0, 50)).toEqual(Array.from({ length: 50 }, (_, i) => `line ${i + 11}`));
+    expect(lines.at(-1)).toBe('(exit code 1)');
+  });
+
+  it('adds the exit code to shorter output without dropping any of it', () => {
+    expect(exitOutput(['a', 'b'], 0)).toEqual(['a', 'b', '(exit code 0)']);
   });
 });
 

@@ -120,6 +120,14 @@ export class OutputTail {
   }
 }
 
+/**
+ * What the failure page shows when the server exits: the last `limit` lines of its output, then
+ * the exit code on a line of its own that doesn't take one of those places.
+ */
+export function exitOutput(lines: string[], code: number, limit = OUTPUT_TAIL_LINES): string[] {
+  return [...lines.slice(-limit), `(exit code ${code})`];
+}
+
 export const START_FAILED_HEADING = "PGMac Android Transfer couldn't start its server.";
 export const STOPPED_HEADING = "PGMac Android Transfer's server stopped.";
 

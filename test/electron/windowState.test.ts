@@ -137,6 +137,17 @@ describe('fitToDisplays', () => {
     });
   });
 
+  it('puts a window at the work area origin of a display smaller than the minimum size', () => {
+    const tiny = { x: 1920, y: 40, width: MIN_WIDTH - 80, height: MIN_HEIGHT - 60 };
+    for (const saved of [
+      { x: 2000, y: 100, width: 900, height: 600 },
+      { x: 1930, y: 50, width: 10, height: 10 },
+      { x: 1800, y: 0, width: 300, height: 200 },
+    ]) {
+      expect(fitToDisplays(saved, [tiny])).toEqual(tiny);
+    }
+  });
+
   it('keeps the size and drops the position when there are no displays', () => {
     expect(fitToDisplays({ x: 100, y: 100, width: 900, height: 600 }, [])).toEqual({
       width: 900,

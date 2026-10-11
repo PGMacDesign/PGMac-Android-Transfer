@@ -17,6 +17,7 @@ import {
   STOPPED_HEADING,
   chooseFileHandler,
   dataUrl,
+  exitOutput,
   failurePage,
   isListeningMessage,
   pickFreePort,
@@ -196,8 +197,10 @@ async function startServer(): Promise<void> {
     if (quitting()) return;
     void drained(streams).then(() => {
       if (quitting()) return;
-      const lines = [...tail.lines().map((l) => redact(l, token)), `(exit code ${code})`].slice(
-        -tail.limit,
+      const lines = exitOutput(
+        tail.lines().map((l) => redact(l, token)),
+        code,
+        tail.limit,
       );
       if (!listening || mainWindow) {
         showFailure(listening ? STOPPED_HEADING : START_FAILED_HEADING, lines);
