@@ -60,7 +60,8 @@ export interface SessionDeps {
   adb: SessionAdb;
   hub: Hub;
   store: StateStore;
-  defaultIp: string | null;
+  /** Read at each Start Session, so a changed setting applies without a restart. */
+  defaultIp: () => string | null;
   timing?: Partial<SessionTiming>;
   now?: () => number;
 }
@@ -162,7 +163,7 @@ export class SessionManager {
     const candidates = await this.discover();
     if (gen !== this.gen) throw new HttpError(409, 'Start Session was interrupted.', 'CONFLICT');
 
-    const ip = this.deps.defaultIp;
+    const ip = this.deps.defaultIp();
     if (ip) {
       const matches = candidates.filter((c) => this.targets.get(c.id)?.host === ip);
       if (matches.length === 1) return this.connectAndReport(matches[0]!.id);

@@ -1,5 +1,6 @@
-import { createWriteStream, existsSync } from 'node:fs';
-import { mkdir, stat, utimes } from 'node:fs/promises';
+import { constants, createWriteStream, existsSync } from 'node:fs';
+import { access, mkdir, stat, utimes } from 'node:fs/promises';
+import { isIPv4 } from 'node:net';
 import path from 'node:path';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -7,7 +8,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { Adb, resolveAdbPath } from './adb/adb.ts';
-import { clampConcurrency, type Config } from './config.ts';
+import { clampConcurrency, effectiveSettings, type Config } from './config.ts';
 import { HttpError, invalid, noSession } from './errors.ts';
 import { AndroidFs } from './fs/android.ts';
 import { MacFs } from './fs/mac.ts';
@@ -42,8 +43,8 @@ export interface AppOptions {
   webRoot?: string;
   store?: StateStore;
   runner?: TransferRunner;
-  /** Overrides adb discovery (tests). */
-  resolveAdb?: () => Promise<string | null>;
+  /** Overrides adb discovery (tests); gets the effective adb path setting. */
+  resolveAdb?: (explicit: string | undefined) => Promise<string | null>;
   /** Also accept requests proxied from the Vite dev server on port 5173. */
   dev?: boolean;
   /** Where Finder uploads are staged (tests); defaults to the user's cache folder. */
@@ -72,21 +73,66 @@ const sideParam = (s: unknown): Side => {
   throw invalid('Unknown side.');
 };
 
+const HOST_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+/** An IPv4 address or a hostname; null for a cleared value. */
+function deviceIpParam(v: unknown): string | null {
+  if (v === null) return null;
+  const s = typeof v === 'string' ? v.trim() : undefined;
+  if (s === '') return null;
+  const labels = s?.split('.') ?? [];
+  const ok =
+    s !== undefined &&
+    (isIPv4(s) ||
+      (s.length <= 253 &&
+        labels.every((l) => HOST_LABEL.test(l)) &&
+        // All digits is a mistyped address (999.1.1.1), not a hostname.
+        !labels.every((l) => /^\d+$/.test(l))));
+  if (!ok) throw invalid('Enter an IP address like 192.168.1.20.');
+  return s;
+}
+
+/** True when `p` is an absolute path to an executable whose `adb version` succeeds. */
+async function isWorkingAdb(p: string): Promise<boolean> {
+  if (!path.isAbsolute(p) || p.includes('\0')) return false;
+  try {
+    if (!(await stat(p)).isFile()) return false;
+    await access(p, constants.X_OK);
+    const r = await new Adb(p).exec(['version'], { timeoutMs: 5000 });
+    return r.code === 0 && !r.timedOut;
+  } catch {
+    return false;
+  }
+}
+
 export async function buildApp(opts: AppOptions): Promise<App> {
   const { config } = opts;
   const hub = new Hub();
   const store = opts.store ?? new StateStore();
   await store.load();
 
-  const findAdb = opts.resolveAdb ?? (() => resolveAdbPath(config.adbPath));
+  const effective = () =>
+    effectiveSettings({ defaultDeviceIp: store.defaultDeviceIp, adbPath: store.adbPath }, config);
+  const findAdb = () => (opts.resolveAdb ?? resolveAdbPath)(effective().adbPath);
   const adb = new Adb(await findAdb());
   let adbStatus: AdbStatus = {
     found: !!adb.bin,
     path: adb.bin,
     version: adb.bin ? await adb.version() : null,
   };
+  const refreshAdb = async () => {
+    adb.bin = await findAdb();
+    adbStatus = { found: !!adb.bin, path: adb.bin, version: adb.bin ? await adb.version() : null };
+    hub.emit({ type: 'adb', adb: adbStatus });
+    return adbStatus;
+  };
 
-  const session = new SessionManager({ adb, hub, store, defaultIp: config.defaultDeviceIp });
+  const session = new SessionManager({
+    adb,
+    hub,
+    store,
+    defaultIp: () => effective().defaultDeviceIp,
+  });
   const requireSerial = () => {
     const s = session.serial;
     if (!s) throw noSession();
@@ -118,6 +164,12 @@ export async function buildApp(opts: AppOptions): Promise<App> {
     reveal: revealPaths,
     volumes,
   });
+  const settings = (): Settings => ({
+    maxConcurrent: queue.maxConcurrent,
+    downloadsDir,
+    defaultDeviceIp: store.defaultDeviceIp,
+    adbPath: store.adbPath,
+  });
   volumes.onEvent(
     volumeEventHandler({
       mac,
@@ -129,11 +181,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
         if (downloadsDir !== from && !downloadsDir.startsWith(from + '/')) return;
         downloadsDir = to + downloadsDir.slice(from.length);
         void store.setDownloadsDir(downloadsDir).catch(() => undefined);
-        // Not settings(): this can run before it is defined, while startup is still awaiting.
-        hub.emit({
-          type: 'settings',
-          settings: { maxConcurrent: queue.maxConcurrent, downloadsDir },
-        });
+        hub.emit({ type: 'settings', settings: settings() });
       },
     }),
   );
@@ -141,7 +189,6 @@ export async function buildApp(opts: AppOptions): Promise<App> {
   const pairing = new PairingManager({ adb, hub, session });
 
   let macStorage = await mac.storage();
-  const settings = (): Settings => ({ maxConcurrent: queue.maxConcurrent, downloadsDir });
   const macInfo = () => ({ home: opts.home, platform, storage: macStorage });
   const snapshot = (): ServerSnapshot => ({
     adb: adbStatus,
@@ -207,12 +254,7 @@ export async function buildApp(opts: AppOptions): Promise<App> {
 
   server.get('/api/snapshot', async () => snapshot());
 
-  server.post('/api/adb/recheck', async () => {
-    adb.bin = await findAdb();
-    adbStatus = { found: !!adb.bin, path: adb.bin, version: adb.bin ? await adb.version() : null };
-    hub.emit({ type: 'adb', adb: adbStatus });
-    return adbStatus;
-  });
+  server.post('/api/adb/recheck', refreshAdb);
 
   const requireAdb = () => {
     if (!adb.bin)
@@ -417,21 +459,37 @@ export async function buildApp(opts: AppOptions): Promise<App> {
 
   server.post('/api/settings', async (req) => {
     const b = body<Settings>(req);
+    // Every field is checked before any is applied, so a 400 leaves all settings as they were.
+    let dir: string | undefined;
     if (b.downloadsDir !== undefined) {
-      const dir = normalizeAbs(b.downloadsDir);
+      dir = normalizeAbs(b.downloadsDir);
       const st = await stat(dir).catch(() => null);
       if (!st?.isDirectory()) throw invalid('That folder does not exist.');
+    }
+    const max = b.maxConcurrent;
+    if (max !== undefined && (typeof max !== 'number' || !Number.isFinite(max))) {
+      throw invalid('maxConcurrent must be a number.');
+    }
+    const ip = b.defaultDeviceIp === undefined ? undefined : deviceIpParam(b.defaultDeviceIp);
+    let adbPath: string | null | undefined;
+    if (b.adbPath !== undefined) {
+      adbPath = typeof b.adbPath === 'string' ? b.adbPath.trim() || null : b.adbPath;
+      if (adbPath !== null && (typeof adbPath !== 'string' || !(await isWorkingAdb(adbPath)))) {
+        throw invalid("That file isn't a working adb.");
+      }
+    }
+
+    if (dir !== undefined) {
       downloadsDir = dir;
       await store.setDownloadsDir(dir);
+    }
+    if (max !== undefined) queue.setMaxConcurrent(clampConcurrency(max));
+    if (ip !== undefined) await store.setDefaultDeviceIp(ip);
+    if (adbPath !== undefined) await store.setAdbPath(adbPath);
+    if ([dir, max, ip, adbPath].some((v) => v !== undefined)) {
       hub.emit({ type: 'settings', settings: settings() });
     }
-    if (b.maxConcurrent !== undefined) {
-      if (typeof b.maxConcurrent !== 'number' || !Number.isFinite(b.maxConcurrent)) {
-        throw invalid('maxConcurrent must be a number.');
-      }
-      queue.setMaxConcurrent(clampConcurrency(b.maxConcurrent));
-      hub.emit({ type: 'settings', settings: settings() });
-    }
+    if (adbPath !== undefined) await refreshAdb();
     return settings();
   });
 

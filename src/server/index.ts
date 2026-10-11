@@ -6,6 +6,7 @@ import open from 'open';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { announceListening, type ParentPortLike } from './readiness.ts';
+import { openStateStore } from './stateStore.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const config = loadConfig(root);
@@ -14,6 +15,7 @@ const dev = process.env.PGMAC_DEV === '1';
 const app = await buildApp({
   config,
   home: os.homedir(),
+  store: openStateStore(config.stateDir),
   webRoot: dev ? undefined : path.join(root, 'dist', 'web'),
   dev,
   onQuit: () => process.exit(0),

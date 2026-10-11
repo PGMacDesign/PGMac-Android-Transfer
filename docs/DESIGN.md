@@ -99,6 +99,12 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 | `MAX_CONCURRENT_TRANSFERS` | `3`     | Queue concurrency                    |
 | `ADB_PATH`                 | unset   | Explicit adb binary                  |
 | `OPEN_BROWSER`             | `true`  | Open browser on start                |
+| `STATE_DIR`                | unset   | Folder for `state.json`              |
+
+- Settings are kept in `state.json`: `~/.config/pgmac-transfer/state.json`, or `<STATE_DIR>/state.json` when `STATE_DIR` is set. When `<STATE_DIR>/state.json` doesn't exist yet and the default file does, the default file is copied in once at startup (it is left in place), so the downloads folder and last device carry over.
+- The default device IP and the adb path can also be saved through `POST /api/settings`, because the desktop app can't edit its bundle or `.env`. For each of them the effective value is the saved setting, then the environment variable (`DEFAULT_DEVICE_IP`, `ADB_PATH`), then the default (no preferred device; adb found on `PATH`, `$ANDROID_HOME` or the SDK location). Saving an empty string clears the saved value. The rule lives in `effectiveSettings` in `src/server/config.ts`.
+- A saved adb path must be absolute and executable, and its `adb version` must succeed within 5 seconds; otherwise the request fails and nothing changes. An accepted change re-resolves adb and broadcasts it as an `adb` message, and the next Start Session uses the current default device IP, so neither needs a restart.
+- `PORT` and `OPEN_BROWSER` come from the environment only.
 
 ## v2: Finder and network volumes
 

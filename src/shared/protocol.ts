@@ -217,6 +217,12 @@ export interface Settings {
   maxConcurrent: number;
   /** Where Show in Finder copies Android items. */
   downloadsDir: string;
+  /**
+   * Saved values only, null when not saved; `DEFAULT_DEVICE_IP` and `ADB_PATH` apply then.
+   * Posting "" clears the saved value.
+   */
+  defaultDeviceIp: string | null;
+  adbPath: string | null;
 }
 
 export interface AdbStatus {
@@ -319,7 +325,9 @@ export type ServerMessage =
 // POST /api/uploads/:jobId/dir?path=REL   -> { ok: true }  (creates an empty folder)
 // POST /api/uploads/:jobId/complete       -> { ok: true }  (all files sent; job is queued)
 // POST /api/reveal  {side: 'mac', paths}  -> { ok: true }  (reveal Mac items in place)
-// POST /api/settings  Partial<Settings>   -> Settings  (downloadsDir must be an existing folder)
+// POST /api/settings  Partial<Settings>   -> Settings  (downloadsDir must be an existing folder;
+//      defaultDeviceIp an IPv4 address or hostname; adbPath an absolute path to a working adb,
+//      which is re-resolved and broadcast as an `adb` message. Nothing is applied on a 400.)
 // POST /api/quit                          -> { ok: true }  (server exits)
 //
 // Errors use HTTP 4xx/5xx with an ApiError body.
