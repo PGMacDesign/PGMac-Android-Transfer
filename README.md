@@ -45,6 +45,8 @@ Quitting (Cmd+Q, or Quit in the menu) with transfers running or queued asks firs
 
 In the app, you can also drag Mac-pane items out of the window onto Finder, the Desktop or another app, and they arrive as the real files. Phone items still use **Download & Show in Finder**.
 
+The app logs to `~/Library/Logs/PGMac Android Transfer/main.log` (the previous 5 MB in `main.old.log`); **Help > Show Logs** reveals it in Finder.
+
 ### Build the desktop app
 
 ```sh

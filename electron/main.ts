@@ -22,12 +22,14 @@ import {
   isListeningMessage,
   pickFreePort,
   redact,
+  SERVER_HOST,
   serverEnv,
   windowUrl,
 } from './lib.ts';
 import { resolveApiToken } from '../src/server/token.ts';
 import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
 import { isExternalUrl } from './links.ts';
+import { FileLog, redactedLines } from './log.ts';
 import { appMenuTemplate } from './menu.ts';
 import { QuitController, quitPrompt, QUIT_BUTTON } from './quit.ts';
 import { trashHandler } from './trash.ts';
@@ -41,6 +43,15 @@ const dragIconPath = path.join(import.meta.dirname, 'drag-icon.png');
 const OUTPUT_DRAIN_MS = 500;
 // Move and resize fire continuously during a drag; the final bounds are what matter.
 const SAVE_STATE_DELAY_MS = 500;
+
+// Launched from the Dock or Finder, stdout and stderr go nowhere; this file is what's left to
+// diagnose a failure afterwards.
+const log = new FileLog(() => app.getPath('logs'));
+log.write(
+  'main',
+  `Starting ${app.name} ${app.getVersion()} (Electron ${process.versions.electron}, ` +
+    `${app.isPackaged ? 'packaged' : 'development'})`,
+);
 
 let mainWindow: BrowserWindow | null = null;
 let server: UtilityProcess | null = null;
@@ -160,17 +171,22 @@ async function startServer(): Promise<void> {
 
   // Captured now because the child's stream properties go null once it exits.
   const streams: NodeJS.ReadableStream[] = [];
-  for (const [name, stream, echo] of [
-    ['stdout', child.stdout, process.stdout],
-    ['stderr', child.stderr, process.stderr],
+  for (const [name, source, stream, echo] of [
+    ['stdout', 'server', child.stdout, process.stdout],
+    ['stderr', 'server:err', child.stderr, process.stderr],
   ] as const) {
     if (!stream) continue;
     streams.push(stream);
     stream.setEncoding('utf8');
+    const lines = redactedLines(token, (line) => {
+      log.write(source, line);
+      echo.write(`${line}\n`);
+    });
     stream.on('data', (chunk: string) => {
       tail.write(name, chunk);
-      echo.write(redact(chunk, token));
+      lines.write(chunk);
     });
+    stream.once('end', () => lines.end());
   }
 
   const onTrash = trashHandler({
@@ -188,10 +204,12 @@ async function startServer(): Promise<void> {
     quitter.onServerMessage(message);
     if (listening || !isListeningMessage(message, port)) return;
     listening = true;
+    log.write('main', `Server listening on ${SERVER_HOST}:${port}`);
     showPage(windowUrl(port, token));
   });
 
   child.once('exit', (code) => {
+    log.write('main', `Server exited with code ${code}`);
     serverRunning = false;
     quitter.onServerExit();
     if (quitting()) return;
@@ -217,6 +235,8 @@ async function startServer(): Promise<void> {
 app.on('before-quit', (event) => {
   if (!quitter.allowQuit()) event.preventDefault();
 });
+
+app.on('will-quit', () => log.write('main', 'Quit'));
 
 // The server and its transfers outlive the window, as Mac apps do; Quit ends them.
 app.on('window-all-closed', () => {});
@@ -266,11 +286,17 @@ app
           appName: app.name,
           isPackaged: app.isPackaged,
           openExternal: (url) => void shell.openExternal(url),
+          showLogs: () => {
+            const file = log.ensureFile();
+            if (file) shell.showItemInFolder(file);
+          },
         }),
       ),
     );
     return startServer();
   })
   .catch((err: unknown) => {
-    showFailure(START_FAILED_HEADING, [String(err instanceof Error ? (err.stack ?? err) : err)]);
+    const message = String(err instanceof Error ? (err.stack ?? err) : err);
+    log.write('main', `Startup failed: ${message}`);
+    showFailure(START_FAILED_HEADING, [message]);
   });
