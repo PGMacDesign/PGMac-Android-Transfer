@@ -1,6 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
-import { HELP_LABEL, HELP_URL, appMenuTemplate } from '../../electron/menu.ts';
+import { HELP_LABEL, HELP_URL, SHOW_LOGS_LABEL, appMenuTemplate } from '../../electron/menu.ts';
 
 const submenu = (menu: MenuItemConstructorOptions[], label: string) => {
   const top = menu.find((m) => m.label === label);
@@ -9,8 +9,8 @@ const submenu = (menu: MenuItemConstructorOptions[], label: string) => {
 const roles = (items: MenuItemConstructorOptions[]) =>
   items.filter((i) => i.type !== 'separator').map((i) => i.role);
 
-const build = (isPackaged: boolean, openExternal = vi.fn()) =>
-  appMenuTemplate({ appName: 'PGMac Android Transfer', isPackaged, openExternal });
+const build = (isPackaged: boolean, openExternal = vi.fn(), showLogs = vi.fn()) =>
+  appMenuTemplate({ appName: 'PGMac Android Transfer', isPackaged, openExternal, showLogs });
 
 describe('appMenuTemplate', () => {
   it('has the app, Edit, View, Window and Help menus in order', () => {
@@ -56,5 +56,14 @@ describe('appMenuTemplate', () => {
     (item?.click as () => void)();
     expect(openExternal).toHaveBeenCalledWith(HELP_URL);
     expect(HELP_URL).toBe('https://github.com/PGMacDesign/PGMac-Android-Transfer#readme');
+  });
+
+  it('shows the log file from Help', () => {
+    const showLogs = vi.fn();
+    const items = submenu(build(true, vi.fn(), showLogs), 'Help');
+    const item = items.find((i) => i.label === SHOW_LOGS_LABEL);
+    expect(SHOW_LOGS_LABEL).toBe('Show Logs');
+    (item?.click as () => void)();
+    expect(showLogs).toHaveBeenCalledOnce();
   });
 });

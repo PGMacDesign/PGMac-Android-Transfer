@@ -35,8 +35,16 @@ function setup() {
   const adb = new FakeAdb();
   const session = new FakeSession();
   const { hub } = recordingHub();
-  const pairing = new PairingManager({ adb, hub, session, timeoutMs: 3000, pollMs: 100 });
-  return { adb, session, pairing };
+  const logs: string[] = [];
+  const pairing = new PairingManager({
+    adb,
+    hub,
+    session,
+    timeoutMs: 3000,
+    pollMs: 100,
+    log: (line) => logs.push(line),
+  });
+  return { adb, session, pairing, logs };
 }
 
 const nameFromSvgRequest = (p: PairingManager) =>
@@ -119,5 +127,91 @@ describe('PairingManager', () => {
     expect(t.session.stillWanted?.()).toBe(true);
     t.pairing.cancel();
     expect(t.session.stillWanted?.()).toBe(false);
+  });
+
+  describe('logging', () => {
+    const svc = (instance: string, host = '10.0.0.9') =>
+      ({ instance, kind: 'pairing', host, port: 41827 }) as MdnsService;
+
+    it('logs a QR attempt from start through a pair failure, never with the password', async () => {
+      const t = setup();
+      await t.pairing.startQr();
+      const { serviceName, password } = nameFromSvgRequest(t.pairing);
+      await vi.advanceTimersByTimeAsync(250);
+      t.adb.services = [svc('studio-someone-else')];
+      await vi.advanceTimersByTimeAsync(200);
+      t.adb.services = [
+        svc('studio-someone-else'),
+        { instance: serviceName, kind: 'connect', host: '10.0.0.2', port: 1 },
+        svc(serviceName, '10.0.0.2'),
+      ];
+      // adb's error text can include the command line, password and all.
+      t.adb.result = { ok: false, error: `Failed: adb pair 10.0.0.2:41827 ${password}` };
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(t.logs.map((l) => l.replace(/^\[pairing qr \w+\] /, ''))).toEqual([
+        `QR attempt started, waiting for _adb-tls-pairing service ${serviceName}`,
+        'Seeing 1 _adb-tls-pairing service(s): studio-someone-else',
+        `Seeing 2 _adb-tls-pairing service(s): studio-someone-else, ${serviceName}`,
+        `Found ${serviceName} at 10.0.0.2:41827`,
+        'adb pair 10.0.0.2:41827 failed: Failed: adb pair 10.0.0.2:41827 [password]',
+      ]);
+      expect(t.logs.join('\n')).not.toContain(password);
+    });
+
+    it('logs the pair and connect results of a match', async () => {
+      const t = setup();
+      await t.pairing.startQr();
+      const { serviceName, password } = nameFromSvgRequest(t.pairing);
+      t.adb.services = [svc(serviceName, '10.0.0.2')];
+      await vi.advanceTimersByTimeAsync(100);
+      expect(t.logs.slice(-2)).toEqual([
+        expect.stringMatching(/adb pair 10\.0\.0\.2:41827 succeeded$/),
+        expect.stringMatching(/Connected to Pixel 8 Pro at 10\.0\.0\.2$/),
+      ]);
+      expect(t.logs.join('\n')).not.toContain(password);
+    });
+
+    it('logs a timeout and a cancel', async () => {
+      const t = setup();
+      await t.pairing.startQr();
+      const { serviceName } = nameFromSvgRequest(t.pairing);
+      await vi.advanceTimersByTimeAsync(3300);
+      t.pairing.cancel();
+      expect(t.logs.slice(-2)).toEqual([
+        expect.stringMatching(new RegExp(`Timed out after 3000 ms without seeing ${serviceName}$`)),
+        expect.stringMatching(/Cancelled \(was timeout\)$/),
+      ]);
+    });
+
+    it('logs the cancel of a QR attempt replaced by a new one', async () => {
+      const t = setup();
+      await t.pairing.startQr();
+      await t.pairing.startQr();
+      expect(t.logs.map((l) => l.replace(/^\[pairing qr \w+\] /, ''))).toEqual([
+        expect.stringMatching(/^QR attempt started/),
+        'Cancelled (was waiting)',
+        expect.stringMatching(/^QR attempt started/),
+      ]);
+    });
+
+    it('logs nothing more while polling sees the same services', async () => {
+      const t = setup();
+      await t.pairing.startQr();
+      t.adb.services = [svc('studio-someone-else')];
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(t.logs).toHaveLength(2);
+    });
+
+    it('keeps the typed code out of a code attempt log', async () => {
+      const t = setup();
+      t.adb.result = { ok: false, error: 'Failed: adb pair 10.0.0.2:41827 123456' };
+      await t.pairing.pairWithCode({ host: '10.0.0.2', port: 41827, code: '123456' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.logs.map((l) => l.replace(/^\[pairing code \w+\] /, ''))).toEqual([
+        'Code attempt started for 10.0.0.2:41827',
+        'adb pair 10.0.0.2:41827 failed: Failed: adb pair 10.0.0.2:41827 [password]',
+      ]);
+    });
   });
 });

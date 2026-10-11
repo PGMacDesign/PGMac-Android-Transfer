@@ -22,13 +22,18 @@ export interface PairingDeps {
   timeoutMs?: number;
   pollMs?: number;
   now?: () => number;
+  /** Info-level log lines. The server has no logger of its own, so this defaults to stdout. */
+  log?: (line: string) => void;
 }
 
 interface Attempt {
   snap: PairingSnapshot;
   serviceName: string | null;
+  /** The secret `adb pair` is given: the QR password, or the code the user typed. */
   password: string | null;
   timer: NodeJS.Timeout | null;
+  /** How many `_adb-tls-pairing` services the last poll saw, so only changes are logged. */
+  pairingSeen: number;
 }
 
 const ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -45,6 +50,7 @@ export class PairingManager {
   private readonly timeoutMs: number;
   private readonly pollMs: number;
   private readonly now: () => number;
+  private readonly logLine: (line: string) => void;
   private current: Attempt | null = null;
 
   constructor(deps: PairingDeps) {
@@ -52,6 +58,17 @@ export class PairingManager {
     this.timeoutMs = deps.timeoutMs ?? 120_000;
     this.pollMs = deps.pollMs ?? 1000;
     this.now = deps.now ?? Date.now;
+    this.logLine = deps.log ?? ((line) => console.log(line));
+  }
+
+  /**
+   * Logs a line about attempt `a`. Its password is cut out of everything, including adb's own
+   * error text, which can echo the command line it was given.
+   */
+  private log(a: Attempt, message: string) {
+    const secret = a.password;
+    const text = secret ? message.split(secret).join('[password]') : message;
+    this.logLine(`[pairing ${a.snap.mode} ${a.snap.attemptId.slice(0, 8)}] ${text}`);
   }
 
   snapshot(): PairingSnapshot | null {
@@ -76,7 +93,10 @@ export class PairingManager {
     const a = this.current;
     if (a?.timer) clearTimeout(a.timer);
     this.current = null;
-    if (a) this.emit();
+    if (a) {
+      this.log(a, `Cancelled (was ${a.snap.status})`);
+      this.emit();
+    }
   }
 
   async startQr(): Promise<PairingSnapshot> {
@@ -101,8 +121,10 @@ export class PairingManager {
       serviceName,
       password,
       timer: null,
+      pairingSeen: 0,
     };
     this.current = a;
+    this.log(a, `QR attempt started, waiting for _adb-tls-pairing service ${serviceName}`);
     this.emit();
     this.schedulePoll(a);
     return { ...a.snap };
@@ -115,16 +137,27 @@ export class PairingManager {
   private async poll(a: Attempt) {
     if (!this.isLive(a) || a.snap.status !== 'waiting') return;
     if (this.now() >= a.snap.expiresAt) {
+      this.log(a, `Timed out after ${this.timeoutMs} ms without seeing ${a.serviceName}`);
       this.update(a, { status: 'timeout' });
       return;
     }
     const services = await this.deps.adb.mdnsServices().catch(() => [] as MdnsService[]);
     if (!this.isLive(a)) return;
-    const svc = services.find((s) => s.kind === 'pairing' && s.instance === a.serviceName);
+    const pairing = services.filter((s) => s.kind === 'pairing');
+    if (pairing.length !== a.pairingSeen) {
+      a.pairingSeen = pairing.length;
+      const names = pairing.map((s) => s.instance).join(', ');
+      this.log(
+        a,
+        `Seeing ${pairing.length} _adb-tls-pairing service(s)${names ? `: ${names}` : ''}`,
+      );
+    }
+    const svc = pairing.find((s) => s.instance === a.serviceName);
     if (!svc) {
       this.schedulePoll(a);
       return;
     }
+    this.log(a, `Found ${svc.instance} at ${svc.host}:${svc.port}`);
     this.update(a, { status: 'pairing' });
     await this.pairAndConnect(a, svc.host, svc.port, a.password!);
   }
@@ -151,10 +184,12 @@ export class PairingManager {
         deviceName: null,
       },
       serviceName: null,
-      password: null,
+      password: code,
       timer: null,
+      pairingSeen: 0,
     };
     this.current = a;
+    this.log(a, `Code attempt started for ${host}:${port}`);
     this.emit();
     void this.pairAndConnect(a, host, port, code);
     return { ...a.snap };
@@ -166,15 +201,22 @@ export class PairingManager {
       .catch((err: Error) => ({ ok: false as const, error: err.message }));
     if (!this.isLive(a)) return;
     if (!res.ok) {
+      this.log(a, `adb pair ${host}:${port} failed: ${res.error}`);
       this.update(a, { status: 'error', error: res.error });
       return;
     }
+    this.log(a, `adb pair ${host}:${port} succeeded`);
     this.update(a, { status: 'success' });
-    if (this.deps.session.isConnected()) return;
+    if (this.deps.session.isConnected()) {
+      this.log(a, 'A session is already connected, so not connecting to the paired device');
+      return;
+    }
     try {
       const s = await this.deps.session.connectAfterPairing(host, () => this.isLive(a));
+      this.log(a, `Connected to ${s.device?.model ?? 'the device'} at ${host}`);
       this.update(a, { deviceName: s.device?.model ?? null });
     } catch (err) {
+      this.log(a, `Connecting to ${host} failed: ${(err as Error).message}`);
       this.update(a, { status: 'error', error: (err as Error).message });
     }
   }
