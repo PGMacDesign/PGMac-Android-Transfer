@@ -8,7 +8,7 @@ The desktop app is built by pgmac-factory one ticket at a time. You do not write
 
 - **Source of truth:** `docs/DESIGN.md` (architecture and Invariants) and the Linear project "PGMac Android Transfer" (P-PGM-13), whose assessment document "Electron vs native macOS app: assessment" records the decisions: Electron, Fastify kept in a `utilityProcess`, a per-launch API token, bring-your-own adb, Developer ID signing outside the Mac App Store.
 - **Builder rules:** `AGENTS.md`.
-- **Tickets:** `docs/tickets/PGM-<n>-<slug>.md`, one per factory ticket, filed with `factory/file_tickets.py`. `factory/ticket-ids.json` maps ticket ids to bead ids. Ids match Linear (PGM-360a and PGM-360b are two factory tickets for Linear's PGM-360, and so on).
+- **Tickets:** `docs/tickets/PGM-<n>-<slug>.md`, one per factory ticket, filed with `factory/file_tickets.py`. `factory/ticket-ids.json` maps ticket ids to bead ids. Ids match Linear: a letter suffix splits one Linear issue into several factory tickets (PGM-365a, 365b and 365c are Linear's PGM-365), and `f` marks a review follow-up (PGM-358f).
 - **Factory:** the engine at `~/_Development/_AIWorkspace/pgmac-factory`, run as a dedicated instance with `factory/factory.yaml`. Its data, logs, run lock, pause flag and Beads queue are in `~/factory-data-pgmac-transfer`, and queue ids start with `pat-`. How to operate it: `~/_Development/_AIWorkspace/pgmac-factory/docs/new-project.md`, sections 7 and 8.
 - **Gate:** `./scripts/verify.sh` locally, plus the GitHub Actions `check` job (`requiredCheck: check`). The repo is public, so Actions minutes are free, and the workflow stays enabled on purpose.
 
@@ -69,7 +69,7 @@ Use `/loop` (no interval) with this work list: "watch the PGMac Android Transfer
 
 ## 7. Milestones
 
-- **W1 (De-risk and MVP code):** PGM-358, 359, 360a, 360b, 362a, 362b, 363, 364, 365a, 365b, 366, 367. Done when all have merged and the owner has run each ticket's "Owner manual check" (batch them into one list for the owner once the wave merges).
+- **W1 (De-risk and MVP code):** PGM-358, 359, 360a, 362a, 362b, 363, 364, 365a, 365b, 365c, 366, 367 (PGM-360b was folded into 360a). Review follow-ups (milestone F1, mostly low priority) run after them. Done when all have merged and the owner has run each ticket's "Owner manual check" (batch them into one list for the owner once the wave merges).
 - **De-risk spike, PGM-361 (owner):** after PGM-358 and PGM-359 merge, and PGM-367 if possible, the owner launches the app from the Dock or Finder on a fresh macOS user account and records adb discovery and the privacy prompts. Prepare the build and a checklist from the Linear issue for them. Its findings unblock PGM-369.
 - **Signed release (later waves):** PGM-368 (fuses, CSP) after PGM-367; PGM-369 (Info.plist, entitlements) after PGM-361's findings; PGM-374 (supply chain, minus GitHub settings); PGM-373 (auto-update) once PGM-372 exists; PGM-376 (docs) after QA. Write each as a ticket file and file it when its blockers clear.
 - **Owner only:** PGM-370 (Apple Developer enrollment, costs money, takes days), PGM-371 (repo rulesets and Actions settings), PGM-372 (release workflow secrets in a GitHub Environment; the workflow file can be a factory ticket once PGM-370 is done), PGM-375 (clean-machine QA).
