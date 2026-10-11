@@ -8,6 +8,7 @@ import { buildApp, type App } from '../src/server/app.ts';
 import {
   activeJobCount,
   listenForQuit,
+  stopOnSignal,
   type QuitPort,
   type QuitReply,
 } from '../src/server/parentPort.ts';
@@ -287,7 +288,56 @@ describe('server entry', () => {
     );
     expect(src).toMatch(/listenForQuit\(parentPort, \{/);
     expect(src).toContain('shutdown: app.shutdown,');
-    // Signals wait for the same shutdown before exiting.
-    expect(src).toMatch(/await app\.shutdown\(\);\s*process\.exit\(0\);/);
+    // Signals wait for the same shutdown before exiting, without a browser-mode escape under
+    // the desktop app.
+    expect(src).toMatch(
+      /stopOnSignal\(\{\s*desktop: parentPort !== undefined,\s*shutdown: app\.shutdown,/,
+    );
+    expect(src).toContain("process.on('SIGINT', () => void stop());");
+    expect(src).toContain("process.on('SIGTERM', () => void stop());");
+  });
+});
+
+describe('stopOnSignal', () => {
+  const slowShutdown = () => {
+    let finish!: () => void;
+    const promise = new Promise<void>((r) => (finish = r));
+    return { shutdown: vi.fn(() => promise), finish };
+  };
+
+  it('waits for the shutdown, then exits 0', async () => {
+    const s = slowShutdown();
+    const exit = vi.fn();
+    const stop = stopOnSignal({ desktop: false, shutdown: s.shutdown, exit, log: () => {} });
+    void stop();
+    await flush();
+    expect(exit).not.toHaveBeenCalled();
+    s.finish();
+    await flush();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it('under the desktop app, a second signal still waits for the shared shutdown', async () => {
+    const s = slowShutdown();
+    const exit = vi.fn();
+    const stop = stopOnSignal({ desktop: true, shutdown: s.shutdown, exit, log: () => {} });
+    void stop();
+    void stop();
+    void stop();
+    await flush();
+    expect(exit).not.toHaveBeenCalled();
+    s.finish();
+    await flush();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(s.shutdown).toHaveBeenCalledOnce();
+  });
+
+  it('in browser mode, a second Ctrl+C exits at once as before', async () => {
+    const s = slowShutdown();
+    const exit = vi.fn();
+    const stop = stopOnSignal({ desktop: false, shutdown: s.shutdown, exit, log: () => {} });
+    void stop();
+    void stop();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 });

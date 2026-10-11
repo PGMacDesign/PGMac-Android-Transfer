@@ -314,6 +314,23 @@ describe('QuitController', () => {
     expect(h.posted).toEqual(['countActive']);
   });
 
+  it('closes the dialog and quits when the server exits while it is open', async () => {
+    const h = harness();
+    h.controller.allowQuit();
+    h.reply({ type: 'activeCount', count: 2 });
+    expect(h.dialogSignal()!.aborted).toBe(false);
+    // Another client's POST /api/quit, say: the server shuts itself down and exits.
+    h.exit();
+    expect(h.dialogSignal()!.aborted).toBe(true);
+    expect(h.quit).toHaveBeenCalledOnce();
+    expect(h.posted).toEqual(['countActive']);
+    expect(h.controller.allowQuit()).toBe(true);
+    await settle();
+    await vi.advanceTimersByTimeAsync(KILL_AT_MS);
+    expect(h.kill).not.toHaveBeenCalled();
+    expect(h.quit).toHaveBeenCalledOnce();
+  });
+
   it('treats a dialog that fails to show as Cancel', async () => {
     const h = harness();
     h.confirm.mockRejectedValueOnce(new Error('no dialog'));

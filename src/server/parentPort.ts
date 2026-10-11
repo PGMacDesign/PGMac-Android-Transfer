@@ -87,3 +87,29 @@ export function listenForQuit(
   });
   return true;
 }
+
+/**
+ * The server's SIGINT/SIGTERM handler. Every signal waits for the shared `shutdown` before
+ * exiting. In browser mode a second signal while it runs exits at once, as Ctrl+C twice always
+ * has (the exit hook still kills transfer processes). Under the desktop app there is no such
+ * escape: a terminal's second Ctrl+C reaches this process too, and the app's own quit timeline
+ * already bounds how long the shutdown can take.
+ */
+export function stopOnSignal(opts: {
+  desktop: boolean;
+  shutdown: () => Promise<void>;
+  exit: (code: number) => void;
+  log?: (message: string) => void;
+}): () => Promise<void> {
+  let stopping = false;
+  return async () => {
+    if (stopping) {
+      if (!opts.desktop) opts.exit(1);
+      return;
+    }
+    stopping = true;
+    (opts.log ?? console.log)('\nStopping: cancelling transfers and disconnecting…');
+    await opts.shutdown();
+    opts.exit(0);
+  };
+}

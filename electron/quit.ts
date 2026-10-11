@@ -116,8 +116,9 @@ export class QuitController {
 
   onServerExit(): void {
     if (this.state === 'stopping') this.finish();
-    // While counting there is no one left to answer, and so nothing to cancel.
-    else if (this.state === 'counting') this.stop();
+    // A quit was asked for and the server, with every transfer it ran, is already gone: there
+    // is nothing left to count or confirm, so close the dialog and finish.
+    else if (this.state === 'counting' || this.state === 'confirming') this.stop();
   }
 
   private ask(count: number): void {
