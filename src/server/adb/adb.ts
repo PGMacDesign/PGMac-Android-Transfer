@@ -45,20 +45,46 @@ async function isExecutable(p: string): Promise<boolean> {
   }
 }
 
-/** Finds adb: ADB_PATH, then PATH, then $ANDROID_HOME, then the default SDK location. */
-export async function resolveAdbPath(explicit: string | undefined): Promise<string | null> {
+/** Where to look for adb. Injectable so the search order can be tested without the real filesystem. */
+export interface AdbSearch {
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+  /** Fixed install folders holding `adb`, checked after PATH. */
+  fixedBins?: string[];
+}
+
+// A Dock or Finder launch gets launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), which misses
+// Homebrew, so its bin folders (Apple silicon, then Intel) are checked explicitly.
+export const HOMEBREW_BINS = ['/opt/homebrew/bin', '/usr/local/bin'];
+
+/**
+ * Lists adb candidates in priority order: the explicit path, PATH, Homebrew, $ANDROID_HOME and
+ * $ANDROID_SDK_ROOT, then the default SDK locations.
+ */
+export function adbCandidates(explicit: string | undefined, search: AdbSearch = {}): string[] {
+  const env = search.env ?? process.env;
+  const home = search.home ?? os.homedir();
   const candidates: string[] = [];
   if (explicit) candidates.push(explicit);
-  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+  for (const dir of (env.PATH ?? '').split(path.delimiter)) {
     if (dir) candidates.push(path.join(dir, 'adb'));
   }
-  for (const env of ['ANDROID_HOME', 'ANDROID_SDK_ROOT']) {
-    const v = process.env[env];
+  for (const dir of search.fixedBins ?? HOMEBREW_BINS) candidates.push(path.join(dir, 'adb'));
+  for (const name of ['ANDROID_HOME', 'ANDROID_SDK_ROOT']) {
+    const v = env[name];
     if (v) candidates.push(path.join(v, 'platform-tools', 'adb'));
   }
-  candidates.push(path.join(os.homedir(), 'Library', 'Android', 'sdk', 'platform-tools', 'adb'));
-  candidates.push(path.join(os.homedir(), 'Android', 'Sdk', 'platform-tools', 'adb'));
-  for (const c of candidates) {
+  candidates.push(path.join(home, 'Library', 'Android', 'sdk', 'platform-tools', 'adb'));
+  candidates.push(path.join(home, 'Android', 'Sdk', 'platform-tools', 'adb'));
+  return candidates;
+}
+
+/** Returns the first executable candidate from `adbCandidates`, or null. */
+export async function resolveAdbPath(
+  explicit: string | undefined,
+  search: AdbSearch = {},
+): Promise<string | null> {
+  for (const c of adbCandidates(explicit, search)) {
     if (await isExecutable(c)) return c;
   }
   return null;
