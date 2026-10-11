@@ -39,6 +39,8 @@ npm start
 
 `npm run app` builds the UI and opens it in its own window instead of a browser tab. It runs the same server on a free port of its own, so it can run alongside `npm start`, and stops the server when you quit.
 
+In the app, you can also drag Mac-pane items out of the window onto Finder, the Desktop or another app, and they arrive as the real files. Phone items still use **Download & Show in Finder**.
+
 ### Build the desktop app
 
 ```sh

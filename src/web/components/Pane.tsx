@@ -18,7 +18,7 @@ import type {
 import { ANDROID_ROOT, ANDROID_SHORTCUTS, MAC_SHORTCUTS } from '../../shared/protocol.ts';
 import { api, errorMessage, isAbort, RequestError } from '../api.ts';
 import { captureDrop, isFinderDrag, type CapturedDrop } from '../finder.ts';
-import { filePathReader } from '../desktop.ts';
+import { beginPaneDrag, filePathReader, isDropInPlace, type DragInfo } from '../desktop.ts';
 import { batteryIcon, fmtBytes, fmtDate, iconFor, LOW_BATTERY } from '../format.ts';
 import {
   activeShortcut,
@@ -34,12 +34,6 @@ import {
 import { Icon, MenuList, Spinner, useNow, type MenuEntry } from './ui.tsx';
 import { useNarrow } from '../layout.ts';
 import { offlineBannerText, offlineVolumeFor, remapPath, volumeNameFromPath } from '../volumes.ts';
-
-export interface DragInfo {
-  from: Side;
-  dir: string;
-  names: string[];
-}
 
 export interface OverInfo {
   side: Side;
@@ -419,6 +413,7 @@ export function Pane(props: PaneProps) {
     const list = selected.includes(name) ? selected : [name];
     if (!selected.includes(name)) select([name], name, name);
     pendingRef.current = null;
+    if (!beginPaneDrag({ from: side, dir: path, names: list }, e, props.setDrag)) return;
     const g = ghostRef.current;
     if (g) {
       const label = g.querySelector('[data-c]');
@@ -427,7 +422,6 @@ export function Pane(props: PaneProps) {
     }
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/plain', list.join('\n'));
-    props.setDrag({ from: side, dir: path, names: list });
   };
   const sameOver = (o: OverInfo) =>
     over !== null &&
@@ -483,6 +477,7 @@ export function Pane(props: PaneProps) {
       const captured = captureDrop(e.dataTransfer, filePathReader());
       dragEnd();
       if (!finderOk) return props.onToast(`${notReady}.`);
+      if (!isA && captured.kind === 'paths' && isDropInPlace(captured.paths, path)) return;
       props.onFinderDrop(side, folder ? joinPath(path, folder) : path, captured);
       return;
     }
