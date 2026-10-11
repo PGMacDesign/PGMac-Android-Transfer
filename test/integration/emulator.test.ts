@@ -95,6 +95,7 @@ describe.skipIf(!enabled)('emulator end-to-end', () => {
         maxConcurrent: 3,
         adbPath: undefined,
         openBrowser: false,
+        stateDir: null,
       },
       home: local,
       store: new StateStore(path.join(local, 'state.json')),

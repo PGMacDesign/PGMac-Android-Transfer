@@ -70,7 +70,13 @@ function setup(defaultIp: string | null = null) {
   const adb = new FakeAdb();
   const queue = new FakeQueue();
   const { hub, messages } = recordingHub();
-  const session = new SessionManager({ adb, hub, store: tmpStore(), defaultIp, timing });
+  const session = new SessionManager({
+    adb,
+    hub,
+    store: tmpStore(),
+    defaultIp: () => defaultIp,
+    timing,
+  });
   session.attachQueue(queue);
   return { adb, queue, session, messages };
 }
@@ -107,6 +113,26 @@ describe('SessionManager', () => {
     const r = await t.session.start();
     expect(r.result).toBe('connected');
     expect(t.session.snapshot().device?.serial).toBe('192.168.1.42:40001');
+  });
+
+  it('reads the default device IP at each Start Session', async () => {
+    const adb = new FakeAdb();
+    const { hub } = recordingHub();
+    let ip: string | null = '10.0.0.7';
+    const session = new SessionManager({
+      adb,
+      hub,
+      store: tmpStore(),
+      defaultIp: () => ip,
+      timing,
+    });
+    session.attachQueue(new FakeQueue());
+    expect((await session.start()).result).toBe('pair');
+    ip = '10.0.0.8';
+    expect((await session.start()).result).toBe('pair');
+    ip = null;
+    expect((await session.start()).result).toBe('pair');
+    expect(adb.connects).toEqual(['10.0.0.7:5555', '10.0.0.8:5555']);
   });
 
   it('offers a picker for several devices and pairing for none', async () => {
@@ -280,7 +306,7 @@ describe('SessionManager', () => {
       adb,
       hub,
       store: tmpStore(),
-      defaultIp: null,
+      defaultIp: () => null,
       timing: { healthMs: 100, statusMs: 1000, reconnectWindowMs: 5000, backoffMs: [200] },
     });
     session.attachQueue(new FakeQueue());
