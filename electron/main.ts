@@ -26,14 +26,13 @@ import {
 import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
 import { isExternalUrl } from './links.ts';
 import { appMenuTemplate } from './menu.ts';
+import { QuitController, quitPrompt, QUIT_BUTTON } from './quit.ts';
 import { loadWindowState, saveWindowState, windowStatePath } from './windowState.ts';
 
 const serverEntry = path.join(import.meta.dirname, '..', 'src', 'server', 'index.ts');
 const preload = path.join(import.meta.dirname, 'preload.cjs');
 const dragIconPath = path.join(import.meta.dirname, 'drag-icon.png');
 
-// How long the server gets to cancel transfers and disconnect before it is killed outright.
-const STOP_GRACE_MS = 5000;
 // Output written just before exit can still be in the pipe when `exit` fires.
 const OUTPUT_DRAIN_MS = 500;
 // Move and resize fire continuously during a drag; the final bounds are what matter.
@@ -42,11 +41,40 @@ const SAVE_STATE_DELAY_MS = 500;
 let mainWindow: BrowserWindow | null = null;
 let server: UtilityProcess | null = null;
 let serverRunning = false;
-let quitting = false;
-let stopAttempted = false;
 // What the window shows: the server's page, or a failure page once there is no server. Kept so
 // a window reopened from the Dock shows the same thing.
 let pageUrl: string | null = null;
+
+const quitter = new QuitController({
+  server: () => {
+    const child = server;
+    if (!child) return null;
+    return {
+      running: () => serverRunning,
+      post: (message) => child.postMessage(message),
+      kill: () => {
+        // SIGKILL rather than child.kill()'s SIGTERM: by now the server has had its forceStop
+        // and still not exited, so its signal handler can't be relied on either.
+        if (child.pid === undefined) return void child.kill();
+        try {
+          process.kill(child.pid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      },
+    };
+  },
+  confirm: async (count, signal) => {
+    const { response } = await dialog.showMessageBox({ ...quitPrompt(count), signal });
+    return response === QUIT_BUTTON;
+  },
+  quit: () => app.quit(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
+});
+// Once the server is being shut down its exit is expected, not a failure to show, and the
+// window isn't reopened on a server that is going away.
+const quitting = () => quitter.shuttingDown;
 
 function saveBounds(win: BrowserWindow): void {
   try {
@@ -140,6 +168,7 @@ async function startServer(): Promise<void> {
 
   let listening = false;
   child.on('message', (message: unknown) => {
+    quitter.onServerMessage(message);
     if (listening || !isListeningMessage(message, port)) return;
     listening = true;
     showPage(`http://${SERVER_HOST}:${port}`);
@@ -147,9 +176,10 @@ async function startServer(): Promise<void> {
 
   child.once('exit', (code) => {
     serverRunning = false;
-    if (quitting) return;
+    quitter.onServerExit();
+    if (quitting()) return;
     void drained(streams).then(() => {
-      if (quitting) return;
+      if (quitting()) return;
       const lines = [...tail.lines(), `(exit code ${code})`].slice(-tail.limit);
       if (!listening || mainWindow) {
         showFailure(listening ? STOPPED_HEADING : START_FAILED_HEADING, lines);
@@ -161,39 +191,10 @@ async function startServer(): Promise<void> {
   });
 }
 
-function stopServer(child: UtilityProcess): Promise<void> {
-  return new Promise((resolve) => {
-    if (!serverRunning) return resolve();
-    const giveUp = setTimeout(resolve, STOP_GRACE_MS * 2);
-    const kill = setTimeout(() => {
-      // The graceful stop hung (a stuck adb call, say); don't leave a listener behind.
-      if (child.pid !== undefined) {
-        try {
-          process.kill(child.pid, 'SIGKILL');
-        } catch {
-          // Already gone.
-        }
-      }
-    }, STOP_GRACE_MS);
-    child.once('exit', () => {
-      clearTimeout(kill);
-      clearTimeout(giveUp);
-      resolve();
-    });
-    // SIGTERM, which the server handles by cancelling transfers and disconnecting first.
-    child.kill();
-  });
-}
-
-app.on('before-quit', () => {
-  quitting = true;
-});
-
-app.on('will-quit', (event) => {
-  if (!server || !serverRunning || stopAttempted) return;
-  stopAttempted = true;
-  event.preventDefault();
-  void stopServer(server).finally(() => app.quit());
+// Never lets the quit go ahead with the server running: the quit sequence asks the user,
+// shuts the server down and calls app.quit() again once it has exited.
+app.on('before-quit', (event) => {
+  if (!quitter.allowQuit()) event.preventDefault();
 });
 
 // The server and its transfers outlive the window, as Mac apps do; Quit ends them.
@@ -202,15 +203,12 @@ app.on('window-all-closed', () => {});
 // The Dock icon reopens the window on the same server. The page loads afresh and takes the
 // server's snapshot over its socket, so it picks up the session and transfers as they are now.
 app.on('activate', () => {
-  if (!app.isReady() || mainWindow || quitting || !pageUrl) return;
+  if (!app.isReady() || mainWindow || quitting() || !pageUrl) return;
   showPage(pageUrl);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    quitting = true;
-    app.quit();
-  });
+  process.on(signal, () => quitter.signal());
 }
 
 app

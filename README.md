@@ -39,6 +39,8 @@ npm start
 
 `npm run app` builds the UI and opens it in its own window instead of a browser tab. It runs the same server on a free port of its own, so it can run alongside `npm start`, and stops the server when you quit.
 
+Quitting (Cmd+Q, or Quit in the menu) with transfers running or queued asks first. Confirming cancels them, removes their partial files and stops every transfer process before the app exits; with nothing running it quits at once. The adb server daemon is left running, since other tools may share it: the app never runs `adb kill-server`.
+
 In the app, you can also drag Mac-pane items out of the window onto Finder, the Desktop or another app, and they arrive as the real files. Phone items still use **Download & Show in Finder**.
 
 ### Build the desktop app
