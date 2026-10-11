@@ -1,5 +1,6 @@
 import type { JobStatus } from '../shared/protocol.ts';
 import type { FinderDrop } from './finder.ts';
+import { authHeaders } from './token.ts';
 
 export interface UploadTask {
   jobId: string;
@@ -63,13 +64,15 @@ export async function uploadOne(task: UploadTask, deps: UploaderDeps): Promise<U
   // A request whose job the server already failed or cancelled is dropped by the page too:
   // one that never settles (a file read stuck on a dropped share) would otherwise hold one
   // of the page's few upload slots for good.
-  const send = async (url: string, init: RequestInit): Promise<boolean> => {
+  type SendInit = Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
+  const send = async (url: string, init: SendInit): Promise<boolean> => {
     const ac = new AbortController();
     const watch = setInterval(() => {
       if (!stillWanted()) ac.abort();
     }, deps.checkMs ?? 1000);
     try {
-      return (await deps.fetch(url, { ...init, signal: ac.signal })).ok;
+      const headers = { ...authHeaders(), ...init.headers };
+      return (await deps.fetch(url, { ...init, headers, signal: ac.signal })).ok;
     } catch {
       return false;
     } finally {

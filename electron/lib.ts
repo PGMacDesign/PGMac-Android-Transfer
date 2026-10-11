@@ -3,6 +3,7 @@
 import '../src/server/threadpool.ts';
 import net from 'node:net';
 import type { ListeningMessage } from '../src/server/readiness.ts';
+import { tokenUrl } from '../src/server/token.ts';
 
 export const SERVER_HOST = '127.0.0.1';
 export const OUTPUT_TAIL_LINES = 50;
@@ -27,13 +28,15 @@ export function pickFreePort(host = SERVER_HOST): Promise<number> {
 }
 
 /**
- * The server's environment: the parent's, plus the port, no browser, the wide libuv pool, and
- * the app's own state folder (macOS's Application Support for the app, not the browser mode's).
+ * The server's environment: the parent's, plus the port, no browser, the wide libuv pool, the
+ * app's own state folder (macOS's Application Support for the app, not the browser mode's) and
+ * the API token the window will present.
  */
 export function serverEnv(
   parent: NodeJS.ProcessEnv,
   port: number,
   stateDir: string,
+  token: string,
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(parent)) {
@@ -42,6 +45,7 @@ export function serverEnv(
   env.PORT = String(port);
   env.OPEN_BROWSER = '0';
   env.STATE_DIR = stateDir;
+  env.API_TOKEN = token;
   // libuv reads the pool size once, on first use, which in a utilityProcess can come before
   // the server's own threadpool import runs.
   const poolSize = parent.UV_THREADPOOL_SIZE ?? process.env.UV_THREADPOOL_SIZE;
@@ -72,6 +76,16 @@ export function chooseFileHandler<W extends { webContents: unknown }>(opts: {
     const result = await opts.showOpenDialog(win, { properties: ['openFile'] });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   };
+}
+
+/** What the window loads once the server is listening. */
+export function windowUrl(port: number, token: string): string {
+  return tokenUrl(`http://${SERVER_HOST}:${port}`, token);
+}
+
+/** Hides the token in server output that main echoes or shows on the failure page. */
+export function redact(text: string, token: string): string {
+  return token ? text.split(token).join('[token]') : text;
 }
 
 export function isListeningMessage(message: unknown, port: number): message is ListeningMessage {

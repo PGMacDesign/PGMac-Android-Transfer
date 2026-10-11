@@ -31,6 +31,7 @@ import { appMenuItems, type AppMenuAction } from './menu.ts';
 import { folderLabel, joinPath } from './paths.ts';
 import { usePrefs } from './prefs.ts';
 import { getStoreState, startStore, useStore } from './store.ts';
+import { EXPIRED_TOKEN_MESSAGE, NO_TOKEN_MESSAGE } from './token.ts';
 import { runUploads } from './uploader.ts';
 
 type ModalState =
@@ -52,6 +53,21 @@ type ModalState =
 startStore();
 
 export function App() {
+  const auth = useStore().auth;
+  if (auth === 'ok') return <Workspace />;
+  return (
+    <div className="app">
+      <div className="loading-screen">
+        <div role="alert">
+          <Icon name="lock" />
+          {auth === 'missing' ? NO_TOKEN_MESSAGE : EXPIRED_TOKEN_MESSAGE}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Workspace() {
   const store = useStore();
   const prefs = usePrefs();
   const snap = store.snapshot;

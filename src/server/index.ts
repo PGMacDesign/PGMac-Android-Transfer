@@ -16,6 +16,7 @@ import {
 } from './parentPort.ts';
 import { announceListening, type ParentPortLike } from './readiness.ts';
 import { openStateStore } from './stateStore.ts';
+import { resolveApiToken, tokenUrl } from './token.ts';
 import { forceStop } from './transfers/children.ts';
 
 // Every way out of this process, including process.exit with transfers running, passes here;
@@ -27,6 +28,9 @@ listenForForceStop(parentPort, { forceStop, exit: (code) => process.exit(code) }
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const config = loadConfig(root);
 const dev = process.env.PGMAC_DEV === '1';
+// After loadConfig, so an API_TOKEN in .env counts. `npm run dev` and the desktop app pass
+// their own in the environment, which .env never overrides.
+const token = resolveApiToken(process.env);
 
 const app = await buildApp({
   config,
@@ -34,6 +38,7 @@ const app = await buildApp({
   store: openStateStore(config.stateDir),
   webRoot: dev ? undefined : path.join(root, 'dist', 'web'),
   dev,
+  token,
   trash: parentPort ? trashThroughParent(parentPort) : undefined,
   onQuit: () => process.exit(0),
 });
@@ -49,7 +54,7 @@ try {
   if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
     console.error(
       `Port ${config.port} is already in use. Is PGMac Android Transfer already running? ` +
-        `Open http://127.0.0.1:${config.port} or set PORT in .env.`,
+        `Open the link it printed, or set PORT in .env.`,
     );
     process.exit(1);
   }
@@ -61,8 +66,11 @@ await app.clearStaleStaging();
 // whose staging files the cleanup then deletes.
 announceListening(config.port, parentPort);
 
-const url = `http://127.0.0.1:${dev ? 5173 : config.port}`;
-console.log(`PGMac Android Transfer is running at ${url}`);
+const origin = `http://127.0.0.1:${dev ? 5173 : config.port}`;
+const url = tokenUrl(origin, token);
+// The desktop app hands its window the token itself and shows this output when the server
+// stops, so there the token stays out of it.
+console.log(`PGMac Android Transfer is running at ${parentPort ? origin : url}`);
 console.log('Press Ctrl+C to stop.');
 if (config.openBrowser && !dev) {
   open(url).catch(() => console.log(`Open ${url} in your browser.`));

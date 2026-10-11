@@ -101,11 +101,25 @@ Wireless Debugging uses a random port that changes each time it is toggled, so t
 | `ADB_PATH`                 | unset   | Explicit adb binary                  |
 | `OPEN_BROWSER`             | `true`  | Open browser on start                |
 | `STATE_DIR`                | unset   | Folder for `state.json`              |
+| `API_TOKEN`                | unset   | Fixed local API token                |
 
 - Settings are kept in `state.json`: `~/.config/pgmac-transfer/state.json`, or `<STATE_DIR>/state.json` when `STATE_DIR` is set. When `<STATE_DIR>/state.json` doesn't exist yet and the default file does, the default file is copied in once at startup (it is left in place), so the downloads folder and last device carry over.
 - The default device IP and the adb path can also be saved through `POST /api/settings`, because the desktop app can't edit its bundle or `.env`. For each of them the effective value is the saved setting, then the environment variable (`DEFAULT_DEVICE_IP`, `ADB_PATH`), then the default (no preferred device; adb found on `PATH`, `$ANDROID_HOME` or the SDK location). Saving an empty string clears the saved value. The rule lives in `effectiveSettings` in `src/server/config.ts`.
 - A saved adb path must be absolute and executable, and its `adb version` must succeed within 5 seconds; otherwise the request fails and nothing changes. An accepted change re-resolves adb and broadcasts it as an `adb` message, and the next Start Session uses the current default device IP, so neither needs a restart.
 - `PORT` and `OPEN_BROWSER` come from the environment only.
+
+### Local API token
+
+Loopback is shared by every process and every user account on the Mac, and the Host/Origin check lets through any request without an `Origin`, so the API also requires a token generated at launch.
+
+- `resolveApiToken` in `src/server/token.ts` returns `API_TOKEN` when it is non-empty after trimming, otherwise 32 random bytes as hex. Each launcher calls it once and gives the same value to the server (as `API_TOKEN`) and to its page (as a `#token=` fragment, which is never sent to the server):
+  - Browser mode (`src/server/index.ts`) opens and prints `http://127.0.0.1:<port>/#token=<token>`.
+  - Dev mode (`scripts/dev.ts`) resolves it before forking, so `node --watch` restarts keep the same token, and prints the Vite link once.
+  - The desktop app resolves a fresh one per launch in main and loads it in the window. It is never written to disk or printed, and is redacted from the server output shown when the server stops.
+- With a token configured, every `/api/*` request and the `/ws` upgrade must present it, or get `401 { "error": "Unauthorized" }`. The Host/Origin check runs first, so a forged `Host` or foreign `Origin` is still 403. Static UI assets stay public so the page can load and explain itself. Tokens are compared with `crypto.timingSafeEqual` after a length check.
+- HTTP requests send `Authorization: Bearer <token>`. A browser WebSocket can't set headers, so the page offers `['pgmac', 'token.<token>']` as subprotocols and the server selects `pgmac`.
+- The page reads the fragment once, keeps the token in `sessionStorage` (a reload of the same tab keeps working) and clears the fragment with `history.replaceState`. Without a token it shows a message pointing to the printed link.
+- When the WebSocket closes, the page sends an authenticated `GET /api/snapshot` before reconnecting. A 401 means the server was restarted with a new token, so the page stops retrying and says its link has expired; any other result reconnects with backoff.
 
 ## v2: Finder and network volumes
 
