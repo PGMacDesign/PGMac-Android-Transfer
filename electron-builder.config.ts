@@ -50,6 +50,24 @@ const config: Configuration = {
     target: [{ target: 'dmg', arch: ['universal'] }],
     // Unsigned until the signing work: don't pick up whatever identity is in the keychain.
     identity: null,
+    // Without these, macOS denies Local Network access instead of prompting, and Bonjour
+    // discovery (adb's own mDNS and the dns-sd fallback, both started by the app) sees nothing.
+    // Folder and volume strings are what the TCC prompts show when the local pane reads them.
+    extendInfo: {
+      NSLocalNetworkUsageDescription:
+        'PGMac Android Transfer finds and connects to your phone over your WiFi network.',
+      NSBonjourServices: ['_adb-tls-connect._tcp', '_adb-tls-pairing._tcp'],
+      NSDesktopFolderUsageDescription:
+        'PGMac Android Transfer lets you browse your Desktop and copy files to and from your phone.',
+      NSDocumentsFolderUsageDescription:
+        'PGMac Android Transfer lets you browse your Documents folder and copy files to and from your phone.',
+      NSDownloadsFolderUsageDescription:
+        'PGMac Android Transfer lets you browse your Downloads folder and copy files to and from your phone.',
+      NSNetworkVolumesUsageDescription:
+        'PGMac Android Transfer lets you browse network drives and copy files to and from your phone.',
+      NSRemovableVolumesUsageDescription:
+        'PGMac Android Transfer lets you browse external drives and copy files to and from your phone.',
+    },
   },
   dmg: {
     // The usual drag-to-Applications layout: the app on the left, the link on the right.
