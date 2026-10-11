@@ -46,6 +46,7 @@ The server always knows which transfer processes it started and can kill them sy
 ## Out of scope
 
 - Removing partial files during a forced stop (see Context). The quit dialog and Electron main's quit sequence (PGM-365b).
+- `electron/main.ts` today stops the server by killing the utility process directly, which skips this ticket's `exit` hook. PGM-365b replaces that with a sequence that sends `forceStop` first. Don't change `electron/main.ts` here, and reviewers shouldn't flag that path in this ticket.
 
 ## Size
 
