@@ -22,16 +22,29 @@ Cmd+Q (or Quit from the menu) never silently kills transfers. With transfers run
 1. On `before-quit`, main asks the server (over the parent port, not HTTP) how many jobs are non-terminal (running, queued, uploading, or waiting for a volume). It prevents the quit until it has the answer, waiting at most 2 seconds; with no answer it proceeds as if the count were zero.
 2. Count 0: quit at once with no prompt.
 3. Count N > 0: an async `dialog.showMessageBox` with message "Quit PGMac Android Transfer?", detail "1 transfer in progress will be cancelled." or "N transfers in progress will be cancelled.", buttons "Quit" (default) and "Cancel", and an `AbortSignal` (`signal` option). Cancel returns from the quit sequence immediately: no message is sent to the server and the app keeps running. A second Cmd+Q while the dialog is open does nothing new.
-4. On Quit, main sends `{ type: 'shutdown' }`; the server runs `shutdown()` (which already ends with `forceStop()`) and replies `{ type: 'shutdownDone' }`. The whole sequence after confirmation fits in 10 seconds: main waits up to 8.5 seconds for the reply; without it, sends `{ type: 'forceStop' }` and waits up to 1 second for the server process to exit; then calls `kill()` on it if still alive and quits. Every wait is a timer started up front, so no step can push the total past 10 seconds. This sequence replaces the existing direct kill of the utility process in `electron/main.ts` (`stopServer` or similar) on every path, including window-all-closed and app exit: nothing kills the server process without sending `forceStop` first, because a killed process can't run its `exit` hook.
+4. On Quit, main sends `{ type: 'shutdown' }`; the server awaits `shutdown()` (which ends with `forceStop()`), replies `{ type: 'shutdownDone' }`, then calls `process.exit(0)`. Main follows this exact timeline, measured from confirmation (t = 0), with every timer started up front:
+
+   | Event                               | Main does                                                                                     |
+   | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+   | Server `exit` event, at any time    | Call `quit()` at once. This is the only normal way to finish.                                 |
+   | `shutdownDone` arrives              | Nothing else: keep waiting for `exit`. Never send `forceStop` or call `kill()` because of it. |
+   | t = 8.5 s and no `shutdownDone` yet | Send `{ type: 'forceStop' }`.                                                                 |
+   | t = 9.5 s and no `exit` yet         | Call `kill()` on the utility process, then `quit()`.                                          |
+
+   This sequence replaces the existing direct kill of the utility process in `electron/main.ts` (`stopServer` or similar) on every path, including window-all-closed and app exit: nothing kills the server process except the 9.5-second step above, because a killed process can't run its `exit` hook.
+
 5. SIGINT or SIGTERM delivered to Electron main at any point (including while the dialog is open) aborts the dialog through its `AbortSignal` and runs step 4 as a confirmed quit without asking.
 6. The adb server daemon is left running; the app never runs `adb kill-server`. `README.md` says so in the desktop app section.
-7. Browser mode quit paths (`POST /api/quit`, Ctrl+C) are unchanged.
+7. Browser mode quit paths (`POST /api/quit`, Ctrl+C) behave as before.
+8. `shutdown()` in `src/server/app.ts` is shared: the first call starts it and every caller, including a later one, gets the same promise. Today a second call returns at once while the first is still cancelling, so `POST /api/quit` followed by Cmd+Q (or the reverse) could exit before cleanup finishes. Every path that exits the server (`/api/quit`'s callback, SIGINT/SIGTERM, the parent-port `shutdown`) awaits that shared promise before exiting.
 
 ## Invariants
 
 - **Quit leaves nothing running** (Device session 5): after a confirmed quit that gets `shutdownDone`, every job is terminal, no adb or `cp` child process from the server is alive, and no `.pgmac-partial` file remains. Test it with the server's message handler driven directly: active fake jobs, a quit request, then assert all cancelled, partials removed and no live child. A forced stop after the 8.5-second timeout kills every transfer process but may leave hidden partial files (`docs/DESIGN.md` Device session 5); don't add file cleanup to that path.
 - **Quit always finishes (liveness)**: a confirmed quit calls `quit()` within 10 seconds of confirmation even if the server never replies and never exits. Test with fake timers and a server that ignores every message: `forceStop` is sent at 8.5 s, `kill` and `quit` by 9.5 s.
 - **Cancel means nothing changes**: choosing Cancel sends no message to the server and never calls `kill` or `quit`. Test the Cancel branch to the end.
+- **One shutdown, awaited by all**: two concurrent `shutdown()` calls get the same promise, and neither resolves before the other's cleanup. Test `POST /api/quit` then the parent-port `shutdown` with a slow fake cancel: no exit before the cancel finishes.
+- **A graceful reply is never forced**: after `shutdownDone`, main never sends `forceStop` or calls `kill()` before 9.5 s. Test a reply at 1 s with `exit` at 1.2 s: `quit()` at 1.2 s, no `forceStop`, no `kill`. Test a reply at 1 s with no `exit`: `kill()` and `quit()` at 9.5 s only.
 - **A signal never waits on the dialog**: a signal while the dialog is open aborts it and quits within the same 10-second cap.
 
 ## Test plan
@@ -45,11 +58,15 @@ Cmd+Q (or Quit from the menu) never silently kills transfers. With transfers run
 
 ## Sanctioned edits
 
-- `electron/main.ts`, new modules under `electron/`, `src/server/index.ts`, a new server module for the parent-port messages, tests, `README.md`.
+- `electron/main.ts`, new modules under `electron/`, `src/server/index.ts`, `src/server/app.ts` (the shared `shutdown()` promise only), the server's parent-port message module, tests, `README.md`.
 
 ## Out of scope
 
 - Window and menu behaviour (PGM-365a).
+
+## Review notes
+
+An earlier attempt failed because reviewers disagreed on what follows `shutdownDone`. The table in criterion 4 settles it; findings that contradict it are out of scope.
 
 ## Size
 
