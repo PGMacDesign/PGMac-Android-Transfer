@@ -6,7 +6,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { buildApp, type App } from '../src/server/app.ts';
 import { StateStore } from '../src/server/stateStore.ts';
-import { resolveApiToken, tokenMatches, tokenUrl } from '../src/server/token.ts';
+import {
+  API_TOKEN_FORMAT_MESSAGE,
+  resolveApiToken,
+  startupLine,
+  tokenMatches,
+  tokenUrl,
+} from '../src/server/token.ts';
 import { decodeWireToken, encodeWireToken } from '../src/shared/token.ts';
 import { FakeRunner } from './helpers.ts';
 
@@ -20,8 +26,20 @@ describe('resolveApiToken', () => {
   });
 
   it('keeps a set API_TOKEN, trimmed', () => {
-    expect(resolveApiToken({ API_TOKEN: 'abc123' })).toBe('abc123');
-    expect(resolveApiToken({ API_TOKEN: ' abc123\n' })).toBe('abc123');
+    expect(resolveApiToken({ API_TOKEN: 'abc123-DEF_456xyz' })).toBe('abc123-DEF_456xyz');
+    expect(resolveApiToken({ API_TOKEN: ' abc123-DEF_456xyz\n' })).toBe('abc123-DEF_456xyz');
+    expect(resolveApiToken({ API_TOKEN: 'a'.repeat(16) })).toBe('a'.repeat(16));
+  });
+
+  it('refuses a set API_TOKEN that is too short or outside letters, digits, - and _', () => {
+    for (const bad of [
+      'a'.repeat(15),
+      'abc/def-ghijklmnop',
+      'abc def-ghijklmnop',
+      'abcdefghijklmnop=',
+    ]) {
+      expect(() => resolveApiToken({ API_TOKEN: bad }), bad).toThrow(API_TOKEN_FORMAT_MESSAGE);
+    }
   });
 });
 
@@ -33,6 +51,23 @@ describe('tokenMatches', () => {
     expect(tokenMatches('abcde', 'abcd')).toBe(false);
     expect(tokenMatches('', 'abcd')).toBe(false);
     expect(tokenMatches(undefined, 'abcd')).toBe(false);
+  });
+});
+
+describe('startupLine', () => {
+  const origin = 'http://127.0.0.1:4848';
+  const token = 'a'.repeat(64);
+
+  it('prints the token link in browser and dev mode', () => {
+    expect(startupLine(origin, token, false)).toBe(
+      `PGMac Android Transfer is running at ${origin}/#token=${token}`,
+    );
+  });
+
+  it('leaves the token out under Electron', () => {
+    const line = startupLine(origin, token, true);
+    expect(line).toBe(`PGMac Android Transfer is running at ${origin}`);
+    expect(line).not.toContain(token);
   });
 });
 
