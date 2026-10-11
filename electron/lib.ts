@@ -1,0 +1,113 @@
+// Sets process.env.UV_THREADPOOL_SIZE unless the user already did, so the value handed to the
+// server below is exactly the one the server would choose for itself.
+import '../src/server/threadpool.ts';
+import net from 'node:net';
+import type { ListeningMessage } from '../src/server/readiness.ts';
+
+export const SERVER_HOST = '127.0.0.1';
+export const OUTPUT_TAIL_LINES = 50;
+
+/**
+ * Asks the OS for a free loopback port. The server's config rejects PORT=0 and its Host check
+ * keys on the configured port, so main has to hand it a concrete one.
+ */
+export function pickFreePort(host = SERVER_HOST): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once('error', reject);
+    probe.listen({ host, port: 0 }, () => {
+      const address = probe.address();
+      probe.close(() => {
+        if (address && typeof address === 'object') resolve(address.port);
+        else reject(new Error('Could not read the probe port'));
+      });
+    });
+  });
+}
+
+/** The server's environment: the parent's, plus the port, no browser, and the wide libuv pool. */
+export function serverEnv(parent: NodeJS.ProcessEnv, port: number): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parent)) {
+    if (value !== undefined) env[key] = value;
+  }
+  env.PORT = String(port);
+  env.OPEN_BROWSER = '0';
+  // libuv reads the pool size once, on first use, which in a utilityProcess can come before
+  // the server's own threadpool import runs.
+  const poolSize = parent.UV_THREADPOOL_SIZE ?? process.env.UV_THREADPOOL_SIZE;
+  if (!poolSize) throw new Error('UV_THREADPOOL_SIZE is not set');
+  env.UV_THREADPOOL_SIZE = poolSize;
+  return env;
+}
+
+export function isListeningMessage(message: unknown, port: number): message is ListeningMessage {
+  if (typeof message !== 'object' || message === null) return false;
+  const m = message as Partial<ListeningMessage>;
+  return m.type === 'listening' && m.port === port;
+}
+
+/**
+ * The last lines a process wrote across several streams, for the failure page. Partial lines
+ * are kept per stream so interleaved stdout and stderr chunks don't splice into one line.
+ */
+export class OutputTail {
+  readonly limit: number;
+  private readonly done: string[] = [];
+  private readonly pending = new Map<string, string>();
+
+  constructor(limit = OUTPUT_TAIL_LINES) {
+    this.limit = limit;
+  }
+
+  write(stream: string, chunk: string): void {
+    const parts = ((this.pending.get(stream) ?? '') + chunk).split(/\r?\n/);
+    this.pending.set(stream, parts.pop() ?? '');
+    this.done.push(...parts);
+    if (this.done.length > this.limit) this.done.splice(0, this.done.length - this.limit);
+  }
+
+  lines(): string[] {
+    const partial = [...this.pending.values()].filter((p) => p !== '');
+    return [...this.done, ...partial].slice(-this.limit);
+  }
+}
+
+export const START_FAILED_HEADING = "PGMac Android Transfer couldn't start its server.";
+export const STOPPED_HEADING = "PGMac Android Transfer's server stopped.";
+
+const escapeHtml = (s: string) =>
+  s.replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
+  );
+
+/** A self-contained page showing why the server isn't there, loaded instead of a blank window. */
+export function failurePage(heading: string, lines: string[]): string {
+  const output = lines.length ? lines.map(escapeHtml).join('\n') : '(The server printed nothing.)';
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>${escapeHtml(heading)}</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 2rem; }
+  h1 { font-size: 1.25rem; }
+  pre { padding: 1rem; overflow: auto; white-space: pre-wrap; background: rgba(127, 127, 127, 0.12); border-radius: 6px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>${escapeHtml(heading)}</h1>
+<p>Last ${OUTPUT_TAIL_LINES} lines of its output:</p>
+<pre>${output}</pre>
+</body>
+</html>
+`;
+}
+
+export function dataUrl(html: string): string {
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
