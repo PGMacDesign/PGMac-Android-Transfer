@@ -1,18 +1,33 @@
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEVICE_LOST,
   NO_STAGING_SPACE,
   UPLOAD_INTERRUPTED,
   TransferQueue,
+  planDirection,
+  probeCaseSensitive,
 } from '../src/server/transfers/queue.ts';
 import { FakeRunner, FakeStaging, FakeVolumes, MemoryFs, flush, recordingHub } from './helpers.ts';
 import type { Job } from '../src/shared/protocol.ts';
 import { HttpError } from '../src/server/errors.ts';
+import { MacFs, type VolumeGuard } from '../src/server/fs/mac.ts';
+import type { SideFs } from '../src/server/fs/types.ts';
+import { offlineError } from '../src/server/fs/volumes.ts';
 
 const file = (size: number) => ({ isDir: false, size, mtimeMs: 1 });
 const dir = { isDir: true, size: 0, mtimeMs: 1 };
 
-function setup(opts: { max?: number; macFiles?: number; volumes?: FakeVolumes } = {}) {
+function setup(
+  opts: {
+    max?: number;
+    macFiles?: number;
+    volumes?: FakeVolumes;
+    caseSensitive?: (p: string) => Promise<boolean>;
+  } = {},
+) {
   const n = opts.macFiles ?? 5;
   const macEntries: Record<string, ReturnType<typeof file> | typeof dir> = { '/m': dir };
   for (let i = 0; i < n; i++) macEntries[`/m/f${i}.txt`] = file(100);
@@ -34,6 +49,7 @@ function setup(opts: { max?: number; macFiles?: number; volumes?: FakeVolumes } 
     staging,
     reveal: (paths) => revealed.push(paths),
     volumes: opts.volumes,
+    caseSensitive: opts.caseSensitive ?? (async () => false),
   });
   const push = async (names: string[], decisions = {}) => {
     const plan = await queue.plan({
@@ -1065,9 +1081,101 @@ describe('Network volumes', () => {
   });
 });
 
+/** A case-insensitive volume: lookups ignore case, listings keep each stored name. */
+class FoldingFs extends MemoryFs {
+  override async stat(p: string) {
+    const k = p.toLowerCase();
+    return [...this.files].find(([q]) => q.toLowerCase() === k)?.[1] ?? null;
+  }
+  override async list(dir: string) {
+    const k = dir.toLowerCase();
+    const real = [...this.files.keys()].find((q) => q.toLowerCase() === k) ?? dir;
+    return super.list(real);
+  }
+}
+
+/** A guard that reports every path under /Volumes/NAS offline without issuing the call. */
+const nasOffline = (issued: string[]): VolumeGuard => ({
+  guard: (p, fn) => {
+    if (p.startsWith('/Volumes/NAS/')) {
+      issued.push(p);
+      return Promise.reject(offlineError('NAS'));
+    }
+    return fn();
+  },
+  volumeOf: () => null,
+  offlineFor: () => null,
+  check: async () => true,
+});
+
+/** A queue with no injected case check, so it probes `mac` itself. */
+const queueOnMac = (mac: SideFs) =>
+  new TransferQueue({
+    hub: recordingHub().hub,
+    fs: { mac, android: new MemoryFs() },
+    runner: new FakeRunner(),
+    isConnected: () => true,
+    sessionId: () => 1,
+    maxConcurrent: 1,
+  });
+
+describe('probeCaseSensitive', () => {
+  it('agrees with whether a differently cased lookup finds the same folder', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pgmac-case-'));
+    try {
+      const folder = path.join(root, 'Album');
+      mkdirSync(path.join(folder, '123'), { recursive: true });
+      const insensitive = existsSync(path.join(root, 'ALBUM'));
+      const fs = new MacFs(root);
+      expect(await probeCaseSensitive(fs, folder)).toBe(!insensitive);
+      // A last component without letters is probed through the nearest one that has them.
+      expect(await probeCaseSensitive(fs, path.join(folder, '123'))).toBe(!insensitive);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('finds a case-insensitive volume however the path is cased', async () => {
+    const fs = new FoldingFs({ '/f': dir, '/f/Album': dir, '/f/Album/123': dir });
+    expect(await probeCaseSensitive(fs, '/f/Album')).toBe(false);
+    expect(await probeCaseSensitive(fs, '/f/album')).toBe(false);
+    expect(await probeCaseSensitive(fs, '/f/ALBUM/123')).toBe(false);
+  });
+
+  it('finds a case-sensitive volume, even where the swapped name is an alias', async () => {
+    const fs = new MemoryFs({ '/f': dir, '/f/Album': dir });
+    expect(await probeCaseSensitive(fs, '/f/Album')).toBe(true);
+    // A symlink or other alias named "album" resolves like the original, but is its own entry.
+    fs.files.set('/f/album', dir);
+    expect(await probeCaseSensitive(fs, '/f/Album')).toBe(true);
+  });
+
+  it('fails an offline volume through its guard instead of touching the share', async () => {
+    const issued: string[] = [];
+    const fs = new MacFs('/Users/me', nasOffline(issued));
+    await expect(probeCaseSensitive(fs, '/Volumes/NAS/Album')).rejects.toMatchObject({
+      code: 'OFFLINE',
+    });
+    expect(issued).toEqual(['/Volumes/NAS/album']);
+  });
+});
+
+describe('planDirection', () => {
+  it.each([
+    [{ from: 'mac' }, 'push'],
+    [{ from: 'android' }, 'pull'],
+    [{ from: 'finder', destSide: 'android' }, 'push'],
+    [{ from: 'finder', destSide: 'mac' }, 'copy'],
+    [{ from: 'paths', destSide: 'android' }, 'push'],
+    [{ from: 'paths', destSide: 'mac' }, 'copy'],
+  ] as const)('maps %o to %s', (req, direction) => {
+    expect(planDirection(req)).toBe(direction);
+  });
+});
+
 describe('Finder drops with real paths', () => {
-  const setupPaths = (volumes?: FakeVolumes) => {
-    const t = setup({ max: 5, volumes });
+  const setupPaths = (volumes?: FakeVolumes, caseSensitive?: (p: string) => Promise<boolean>) => {
+    const t = setup({ max: 5, volumes, caseSensitive });
     t.mac.files.set('/f', dir);
     t.mac.files.set('/f/Album', dir);
     t.mac.files.set('/f/x.bin', file(10));
@@ -1193,6 +1301,62 @@ describe('Finder drops with real paths', () => {
     await expect(
       t.queue.plan({ from: 'paths', destSide: 'mac', destDir: '/f/Album', srcPaths: ['/f/Album'] }),
     ).rejects.toThrow(/into itself/);
+  });
+
+  const copyInto = (t: ReturnType<typeof setupPaths>, srcPath: string, destDir: string) =>
+    t.queue.plan({ from: 'paths', destSide: 'mac', destDir, srcPaths: [srcPath] });
+
+  it('refuses to copy a folder into its own subfolder, however the paths are written', async () => {
+    const t = setupPaths();
+    t.mac.files.set('/f/Album/Sub', dir);
+    await expect(copyInto(t, '/f/Album', '/f/Album/Sub')).rejects.toThrow(/into itself/);
+    await expect(copyInto(t, '/f/Album/', '/f/Album/Sub/')).rejects.toThrow(/into itself/);
+    await expect(copyInto(t, '/f/Album', '/f/Album/')).rejects.toThrow(/into itself/);
+    // The default macOS volume ignores case, so these name the same folders.
+    await expect(copyInto(t, '/f/Album', '/f/album/sub')).rejects.toThrow(/into itself/);
+    await expect(copyInto(t, '/f/Album', '/F/ALBUM')).rejects.toThrow(/into itself/);
+  });
+
+  it('allows a copy into a folder that only shares a name prefix', async () => {
+    const t = setupPaths();
+    t.mac.files.set('/f/Album 2', dir);
+    t.mac.files.set('/f/Album..', dir);
+    await expect(copyInto(t, '/f/Album', '/f/Album 2')).resolves.toMatchObject({ itemCount: 1 });
+    await expect(copyInto(t, '/f/Album', '/f/Album..')).resolves.toMatchObject({ itemCount: 1 });
+  });
+
+  it('probes case through the guarded Mac fs, so a stalled share fails the plan', async () => {
+    const issued: string[] = [];
+    // Without an injected check the queue probes through its own Mac fs.
+    const queue = queueOnMac(new MacFs('/Users/me', nasOffline(issued)));
+    await expect(
+      queue.plan({
+        from: 'paths',
+        destSide: 'mac',
+        destDir: '/Volumes/NAS/album',
+        srcPaths: ['/Volumes/NAS/Album'],
+      }),
+    ).rejects.toMatchObject({ code: 'OFFLINE' });
+    expect(issued).toEqual(['/Volumes/NAS/album']);
+  });
+
+  it('probes the default case-insensitive volume when no check is injected', async () => {
+    const queue = queueOnMac(new FoldingFs({ '/f': dir, '/f/Album': dir }));
+    await expect(
+      queue.plan({ from: 'paths', destSide: 'mac', destDir: '/f/album', srcPaths: ['/f/Album'] }),
+    ).rejects.toThrow(/into itself/);
+  });
+
+  it('allows a copy into a differently cased folder on a case-sensitive volume', async () => {
+    const probed: string[] = [];
+    const t = setupPaths(undefined, async (p) => (probed.push(p), true));
+    t.mac.files.set('/f/album', dir);
+    t.mac.files.set('/f/Album/Sub', dir);
+    await expect(copyInto(t, '/f/Album', '/f/album')).resolves.toMatchObject({ itemCount: 1 });
+    expect(probed).toEqual(['/f/Album']);
+    // An exact match is refused without asking the volume.
+    await expect(copyInto(t, '/f/Album', '/f/Album/Sub')).rejects.toThrow(/into itself/);
+    expect(probed).toEqual(['/f/Album']);
   });
 
   it('waits for an offline source share, then starts over when it returns', async () => {
