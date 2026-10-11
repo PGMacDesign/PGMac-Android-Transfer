@@ -14,7 +14,7 @@ import {
   type QuitPort,
   type TrashPort,
 } from './parentPort.ts';
-import { announceListening, type ParentPortLike } from './readiness.ts';
+import { announceListening, startUp, type ParentPortLike } from './readiness.ts';
 import { openStateStore } from './stateStore.ts';
 import { resolveApiToken, startupLine, tokenUrl } from './token.ts';
 import { forceStop } from './transfers/children.ts';
@@ -54,23 +54,25 @@ listenForQuit(parentPort, {
   exit: (code) => process.exit(code),
 });
 
-try {
-  await app.server.listen({ host: '127.0.0.1', port: config.port });
-} catch (err) {
-  if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-    console.error(
-      `Port ${config.port} is already in use. Is PGMac Android Transfer already running? ` +
-        `Open the link it printed, or set PORT in .env.`,
-    );
-    process.exit(1);
-  }
-  throw err;
-}
-
-await app.clearStaleStaging();
-// After the cleanup, like the browser open below: a page opened sooner could start an upload
-// whose staging files the cleanup then deletes.
-announceListening(config.port, parentPort);
+// Browser open below also waits for this, for the same reason the announcement does.
+await startUp({
+  listen: async () => {
+    try {
+      await app.server.listen({ host: '127.0.0.1', port: config.port });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+        console.error(
+          `Port ${config.port} is already in use. Is PGMac Android Transfer already running? ` +
+            `Open the link it printed, or set PORT in .env.`,
+        );
+        process.exit(1);
+      }
+      throw err;
+    }
+  },
+  clearStaleStaging: app.clearStaleStaging,
+  announce: () => announceListening(config.port, parentPort),
+});
 
 const origin = `http://127.0.0.1:${dev ? 5173 : config.port}`;
 const url = tokenUrl(origin, token);

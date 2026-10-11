@@ -17,3 +17,20 @@ export function announceListening(port: number, parentPort: ParentPortLike | und
   parentPort.postMessage({ type: 'listening', port });
   return true;
 }
+
+export interface StartupSteps {
+  listen(): Promise<void>;
+  clearStaleStaging(): Promise<void>;
+  announce(): void;
+}
+
+/**
+ * Announces only once the port is open and stale staging is gone: a page opened sooner could
+ * start an upload whose staging files the cleanup then deletes. A failure in either step
+ * rejects without announcing.
+ */
+export async function startUp(steps: StartupSteps): Promise<void> {
+  await steps.listen();
+  await steps.clearStaleStaging();
+  steps.announce();
+}
