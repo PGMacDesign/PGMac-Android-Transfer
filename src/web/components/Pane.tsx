@@ -18,7 +18,7 @@ import type {
 import { ANDROID_ROOT, ANDROID_SHORTCUTS, MAC_SHORTCUTS } from '../../shared/protocol.ts';
 import { api, errorMessage, isAbort, RequestError } from '../api.ts';
 import { captureDrop, isFinderDrag, type CapturedDrop } from '../finder.ts';
-import { beginPaneDrag, filePathReader, isDropInPlace, type DragInfo } from '../desktop.ts';
+import { beginPaneDrag, filePathReader, finderDropDest, type DragInfo } from '../desktop.ts';
 import { batteryIcon, fmtBytes, fmtDate, iconFor, LOW_BATTERY } from '../format.ts';
 import {
   activeShortcut,
@@ -477,8 +477,8 @@ export function Pane(props: PaneProps) {
       const captured = captureDrop(e.dataTransfer, filePathReader());
       dragEnd();
       if (!finderOk) return props.onToast(`${notReady}.`);
-      if (!isA && captured.kind === 'paths' && isDropInPlace(captured.paths, path)) return;
-      props.onFinderDrop(side, folder ? joinPath(path, folder) : path, captured);
+      const dest = finderDropDest(side, path, folder, captured);
+      if (dest !== null) props.onFinderDrop(side, dest, captured);
       return;
     }
     const d = drag;

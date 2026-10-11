@@ -1,4 +1,5 @@
 import type { Side } from '../shared/protocol.ts';
+import type { CapturedDrop } from './finder.ts';
 import { joinPath, parentOf } from './paths.ts';
 
 /**
@@ -64,11 +65,28 @@ export function beginPaneDrag(
 }
 
 /**
- * Whether a real-path drop onto the Mac pane showing `paneDir` is the pane's own drag-out
- * dropped back where the items already are (onto the folder or one of its rows), which is
- * ignored as a same-pane in-app drop is. The drop arrives like any Finder drop, so the items'
- * folder is what tells; drops of items from anywhere else still copy.
+ * Whether a real-path drop would put every item back in `dest`, the folder it already sits in
+ * (the pane's own drag-out dropped where it came from). That is ignored as a same-pane in-app
+ * drop is. The drop arrives like any Finder drop, so the items' folder is what tells; anything
+ * from another folder still copies.
  */
-export function isDropInPlace(paths: readonly string[], paneDir: string): boolean {
-  return paths.length > 0 && paths.every((p) => parentOf(p) === paneDir);
+export function isDropInPlace(paths: readonly string[], dest: string): boolean {
+  return paths.length > 0 && paths.every((p) => parentOf(p) === dest);
+}
+
+/**
+ * Where a Finder or drag-out drop onto a pane showing `paneDir` lands: the row's folder for a
+ * drop on folder row `folder`, else `paneDir`. Null when the drop is ignored, which is only a
+ * real-path drop onto the Mac pane that `isDropInPlace` against that destination. A row drop of
+ * items from the pane's own folder therefore copies them into the row's folder.
+ */
+export function finderDropDest(
+  side: Side,
+  paneDir: string,
+  folder: string | null,
+  drop: CapturedDrop,
+): string | null {
+  const dest = folder ? joinPath(paneDir, folder) : paneDir;
+  if (side === 'mac' && drop.kind === 'paths' && isDropInPlace(drop.paths, dest)) return null;
+  return dest;
 }
