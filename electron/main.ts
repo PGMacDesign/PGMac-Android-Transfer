@@ -1,4 +1,12 @@
-import { app, BrowserWindow, utilityProcess, type UtilityProcess } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  screen,
+  shell,
+  utilityProcess,
+  type UtilityProcess,
+} from 'electron';
 import path from 'node:path';
 import {
   OutputTail,
@@ -11,6 +19,9 @@ import {
   pickFreePort,
   serverEnv,
 } from './lib.ts';
+import { isExternalUrl } from './links.ts';
+import { appMenuTemplate } from './menu.ts';
+import { loadWindowState, saveWindowState, windowStatePath } from './windowState.ts';
 
 const serverEntry = path.join(import.meta.dirname, '..', 'src', 'server', 'index.ts');
 const preload = path.join(import.meta.dirname, 'preload.cjs');
@@ -19,17 +30,34 @@ const preload = path.join(import.meta.dirname, 'preload.cjs');
 const STOP_GRACE_MS = 5000;
 // Output written just before exit can still be in the pipe when `exit` fires.
 const OUTPUT_DRAIN_MS = 500;
+// Move and resize fire continuously during a drag; the final bounds are what matter.
+const SAVE_STATE_DELAY_MS = 500;
 
 let mainWindow: BrowserWindow | null = null;
 let server: UtilityProcess | null = null;
 let serverRunning = false;
 let quitting = false;
 let stopAttempted = false;
+// What the window shows: the server's page, or a failure page once there is no server. Kept so
+// a window reopened from the Dock shows the same thing.
+let pageUrl: string | null = null;
+
+function saveBounds(win: BrowserWindow): void {
+  try {
+    saveWindowState(windowStatePath(app.getPath('userData')), win.getNormalBounds());
+  } catch (err) {
+    console.error('Could not save the window state:', err);
+  }
+}
 
 function createWindow(): BrowserWindow {
+  const bounds = loadWindowState(
+    windowStatePath(app.getPath('userData')),
+    screen.getAllDisplays().map((d) => d.workArea),
+  );
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    ...bounds,
+    center: bounds.x === undefined,
     title: 'PGMac Android Transfer',
     webPreferences: {
       contextIsolation: true,
@@ -38,15 +66,37 @@ function createWindow(): BrowserWindow {
       preload,
     },
   });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isExternalUrl(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  let saveTimer: NodeJS.Timeout | undefined;
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveBounds(win), SAVE_STATE_DELAY_MS);
+  };
+  win.on('move', scheduleSave);
+  win.on('resize', scheduleSave);
+  win.on('close', () => {
+    clearTimeout(saveTimer);
+    saveBounds(win);
+  });
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
   });
   return win;
 }
 
-function showFailure(heading: string, lines: string[]): void {
+/** Shows `url` in the one window, opening it if it was closed. */
+function showPage(url: string): void {
+  pageUrl = url;
   mainWindow ??= createWindow();
-  void mainWindow.loadURL(dataUrl(failurePage(heading, lines)));
+  void mainWindow.loadURL(url);
+}
+
+function showFailure(heading: string, lines: string[]): void {
+  showPage(dataUrl(failurePage(heading, lines)));
 }
 
 function drained(streams: NodeJS.ReadableStream[]): Promise<void> {
@@ -86,8 +136,7 @@ async function startServer(): Promise<void> {
   child.on('message', (message: unknown) => {
     if (listening || !isListeningMessage(message, port)) return;
     listening = true;
-    mainWindow = createWindow();
-    void mainWindow.loadURL(`http://${SERVER_HOST}:${port}`);
+    showPage(`http://${SERVER_HOST}:${port}`);
   });
 
   child.once('exit', (code) => {
@@ -96,8 +145,12 @@ async function startServer(): Promise<void> {
     void drained(streams).then(() => {
       if (quitting) return;
       const lines = [...tail.lines(), `(exit code ${code})`].slice(-tail.limit);
-      if (!listening) showFailure(START_FAILED_HEADING, lines);
-      else if (mainWindow) showFailure(STOPPED_HEADING, lines);
+      if (!listening || mainWindow) {
+        showFailure(listening ? STOPPED_HEADING : START_FAILED_HEADING, lines);
+      } else {
+        // The window is closed: show why when the Dock icon reopens it, without popping it up.
+        pageUrl = dataUrl(failurePage(STOPPED_HEADING, lines));
+      }
     });
   });
 }
@@ -137,7 +190,15 @@ app.on('will-quit', (event) => {
   void stopServer(server).finally(() => app.quit());
 });
 
-app.on('window-all-closed', () => app.quit());
+// The server and its transfers outlive the window, as Mac apps do; Quit ends them.
+app.on('window-all-closed', () => {});
+
+// The Dock icon reopens the window on the same server. The page loads afresh and takes the
+// server's snapshot over its socket, so it picks up the session and transfers as they are now.
+app.on('activate', () => {
+  if (!app.isReady() || mainWindow || quitting || !pageUrl) return;
+  showPage(pageUrl);
+});
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
@@ -148,7 +209,18 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 app
   .whenReady()
-  .then(startServer)
+  .then(() => {
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate(
+        appMenuTemplate({
+          appName: app.name,
+          isPackaged: app.isPackaged,
+          openExternal: (url) => void shell.openExternal(url),
+        }),
+      ),
+    );
+    return startServer();
+  })
   .catch((err: unknown) => {
     showFailure(START_FAILED_HEADING, [String(err instanceof Error ? (err.stack ?? err) : err)]);
   });

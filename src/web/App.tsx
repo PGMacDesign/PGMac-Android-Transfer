@@ -15,18 +15,12 @@ import {
 } from './components/modals.tsx';
 import { Pane, type DragInfo, type OverInfo } from './components/Pane.tsx';
 import { TransferPanel } from './components/TransferPanel.tsx';
-import {
-  Icon,
-  MenuList,
-  Spinner,
-  Toast,
-  useNow,
-  type MenuEntry,
-  type ToastData,
-} from './components/ui.tsx';
+import { Icon, MenuList, Spinner, Toast, useNow, type ToastData } from './components/ui.tsx';
 import { isNoTrash, noTrashConfirm } from './deletes.ts';
+import { desktopBridge } from './desktop.ts';
 import { collectDrops, isFinderDrag, type DropSource, type FinderDrop } from './finder.ts';
 import { downloadRevealLabel, isActive, revealLabel } from './jobs.ts';
+import { appMenuItems, type AppMenuAction } from './menu.ts';
 import { folderLabel, joinPath } from './paths.ts';
 import { usePrefs } from './prefs.ts';
 import { getStoreState, startStore, useStore } from './store.ts';
@@ -433,54 +427,34 @@ export function App() {
         : null;
   const pill = pillFor(adbFound, session, uiPhase);
 
-  const menuItems: MenuEntry[] = [
-    { kind: 'header', label: 'Appearance' },
-    {
-      label: 'Match system',
-      icon: prefs.theme === 'system' ? 'check' : '',
-      run: () => prefs.setTheme('system'),
-    },
-    {
-      label: 'Light',
-      icon: prefs.theme === 'light' ? 'check' : '',
-      run: () => prefs.setTheme('light'),
-    },
-    {
-      label: 'Dark',
-      icon: prefs.theme === 'dark' ? 'check' : '',
-      run: () => prefs.setTheme('dark'),
-    },
-    { kind: 'sep' },
-    { kind: 'header', label: 'Density' },
-    {
-      label: 'Compact',
-      icon: prefs.density === 'compact' ? 'check' : '',
-      run: () => prefs.setDensity('compact'),
-    },
-    {
-      label: 'Comfortable',
-      icon: prefs.density === 'comfortable' ? 'check' : '',
-      run: () => prefs.setDensity('comfortable'),
-    },
-    { kind: 'sep' },
-    {
-      label: 'Downloads folder…',
-      icon: 'download',
-      run: () => {
+  const menuItems = appMenuItems({
+    theme: prefs.theme,
+    density: prefs.density,
+    adbFound,
+    desktop: desktopBridge() !== null,
+  });
+  const onMenuSelect = (id: string) => {
+    switch (id as AppMenuAction) {
+      case 'theme:system':
+        return prefs.setTheme('system');
+      case 'theme:light':
+        return prefs.setTheme('light');
+      case 'theme:dark':
+        return prefs.setTheme('dark');
+      case 'density:compact':
+        return prefs.setDensity('compact');
+      case 'density:comfortable':
+        return prefs.setDensity('comfortable');
+      case 'downloads':
         setMenuOpen(false);
-        setModal({ kind: 'downloads' });
-      },
-    },
-    { label: 'Pair a new device…', icon: 'qr_code_2', disabled: !adbFound, run: openPair },
-    { kind: 'sep' },
-    {
-      label: 'Quit server',
-      icon: 'power_settings_new',
-      run: () => {
+        return setModal({ kind: 'downloads' });
+      case 'pair':
+        return openPair();
+      case 'quitServer':
         api.quit().then(() => setQuit(true), fail);
-      },
-    },
-  ];
+        return;
+    }
+  };
 
   const paneCommon = {
     session,
@@ -590,6 +564,7 @@ export function App() {
           style={{ top: 42, right: 10 }}
           width={236}
           onClose={() => setMenuOpen(false)}
+          onSelect={onMenuSelect}
         />
       ) : null}
 
