@@ -35,7 +35,7 @@ PGMac Android Transfer moves files between a Mac and an Android device over adb 
 
 ## Never open windows
 
-This runs on the owner's desktop while they work. Never launch anything that opens a window, takes focus or opens a browser tab: no `npm run app`, `npm start`, `npm run dev`, `electron`, `open`, `osascript`, packaged `.app` launches, or tests that do any of these. Verify with unit tests and `./scripts/verify.sh` only; GUI behaviour is the owner's manual check after merge. If the server must run in a test, start it in-process with `buildApp` (no `listen` on 4848, no browser).
+This runs on the owner's desktop while they work. Never launch anything that opens a window, takes focus or opens a browser tab: no `npm run app`, `npm start`, `npm run dev`, `electron`, `open`, `osascript`, packaged `.app` launches, `npm run make` or any packager step that builds or mounts a DMG (`hdiutil`, `appdmg` and Forge's DMG maker drive Finder windows), or tests that do any of these. A packaging ticket is verified by testing its config, not by running the packager. Verify with unit tests and `./scripts/verify.sh` only; GUI behaviour is the owner's manual check after merge. If the server must run in a test, start it in-process with `buildApp` (no `listen` on 4848, no browser).
 
 ## Dependencies
 
