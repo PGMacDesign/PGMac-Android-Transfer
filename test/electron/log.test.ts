@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  appLogsDir,
   FileLog,
   LOG_FILE,
   LOG_MAX_BYTES,
@@ -142,5 +143,27 @@ describe('FileLog', () => {
     log.write('main', 'kept');
     log.ensureFile();
     expect(fs.readFileSync(file!, 'utf8')).toMatch(/\[main\] kept\n$/);
+  });
+});
+
+describe('log folder', () => {
+  const main = () =>
+    fs.readFileSync(path.join(import.meta.dirname, '../../electron/main.ts'), 'utf8');
+
+  it('is named after the app, under ~/Library/Logs', () => {
+    expect(appLogsDir('/Users/pat')).toBe('/Users/pat/Library/Logs/PGMac Android Transfer');
+  });
+
+  it('is set before the log first reads it', () => {
+    const src = main();
+    const set = src.indexOf("app.setAppLogsPath(appLogsDir(app.getPath('home')))");
+    expect(set).toBeGreaterThan(-1);
+    expect(set).toBeLessThan(src.indexOf("new FileLog(() => app.getPath('logs'))"));
+  });
+
+  it('leaves the app name, and so the userData folder holding settings, as it was', () => {
+    const src = main();
+    expect(src).not.toMatch(/app\.setName\(|app\.name\s*=[^=]/);
+    expect(src).not.toMatch(/setPath\(\s*'userData'/);
   });
 });

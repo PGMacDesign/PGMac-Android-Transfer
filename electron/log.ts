@@ -8,6 +8,16 @@ export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 export type LogSource = 'main' | 'server' | 'server:err';
 
+/**
+ * `~/Library/Logs/PGMac Android Transfer`. Electron names the default logs folder after
+ * `app.name`, which comes from package.json's `name`. Renaming the app with `app.setName` would
+ * fix that but also move `userData`, which Electron derives from the same name and which holds
+ * the settings and window state, so only the logs folder is pointed at the display name.
+ */
+export function appLogsDir(home: string): string {
+  return path.join(home, 'Library', 'Logs', 'PGMac Android Transfer');
+}
+
 /** Splits a stream's chunks into whole lines, holding a partial line until its newline. */
 export class LineSplitter {
   private pending = '';

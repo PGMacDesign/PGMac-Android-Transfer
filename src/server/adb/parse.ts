@@ -166,9 +166,20 @@ export function sumSizes(out: string): { bytes: number; files: number } {
   return { bytes, files };
 }
 
+/**
+ * An unsigned app has no Local Network permission, and macOS charges the adb daemon it starts to
+ * it, so every LAN address fails with this. A daemon started from Terminal gets Terminal's
+ * permission instead.
+ */
+export const ADB_BLOCKED_ERROR =
+  'macOS is blocking adb from your local network. Quit any tools using adb, run `adb kill-server && adb start-server` in Terminal, then try again.';
+
+const NO_ROUTE = /no route to host/i;
+
 /** `adb pair` exits 0 even on failure; success is only visible in its output. */
 export function parsePairResult(out: string): { ok: true } | { ok: false; error: string } {
   if (/Successfully paired/i.test(out)) return { ok: true };
+  if (NO_ROUTE.test(out)) return { ok: false, error: ADB_BLOCKED_ERROR };
   const failed = /Failed:\s*(.+)/i.exec(out)?.[1]?.trim();
   if (failed && /password|wrong/i.test(failed)) {
     return {
@@ -190,6 +201,14 @@ export function parsePairResult(out: string): { ok: true } | { ok: false; error:
 /** `adb connect` also exits 0 on failure. */
 export function parseConnectResult(out: string): boolean {
   return /connected to|already connected/i.test(out) && !/failed|cannot|unable/i.test(out);
+}
+
+export type ConnectResult = { ok: true } | { ok: false; error: string | null };
+
+/** `parseConnectResult` plus the reason for a failure, when there is one the user can act on. */
+export function parseConnectOutcome(out: string): ConnectResult {
+  if (parseConnectResult(out)) return { ok: true };
+  return { ok: false, error: NO_ROUTE.test(out) ? ADB_BLOCKED_ERROR : null };
 }
 
 /**

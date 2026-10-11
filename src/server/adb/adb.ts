@@ -5,12 +5,13 @@ import path from 'node:path';
 import { bonjourAvailable, bonjourServices } from './bonjour.ts';
 import {
   parseBattery,
-  parseConnectResult,
+  parseConnectOutcome,
   parseDevices,
   parseMdnsServices,
   parsePairResult,
   parseStatfs,
   type AttachedDevice,
+  type ConnectResult,
   type MdnsService,
 } from './parse.ts';
 import type { BatteryInfo, StorageInfo } from '../../shared/protocol.ts';
@@ -188,9 +189,9 @@ export class Adb {
     return [...fromAdb, ...fromBonjour.filter((s) => !seen.has(`${s.kind}:${s.instance}`))];
   }
 
-  async connect(addr: string, timeoutMs = 15_000): Promise<boolean> {
+  async connect(addr: string, timeoutMs = 15_000): Promise<ConnectResult> {
     const r = await this.exec(['connect', addr], { timeoutMs });
-    return parseConnectResult(r.stdout + r.stderr);
+    return parseConnectOutcome(r.stdout + r.stderr);
   }
 
   async disconnect(serial: string): Promise<void> {

@@ -1,7 +1,7 @@
 import { HttpError } from './errors.ts';
 import type { Hub } from './hub.ts';
 import type { StateStore } from './stateStore.ts';
-import type { AttachedDevice, MdnsService } from './adb/parse.ts';
+import type { AttachedDevice, ConnectResult, MdnsService } from './adb/parse.ts';
 import { splitHostPort, transportOf } from './adb/parse.ts';
 import type {
   BatteryInfo,
@@ -17,7 +17,7 @@ import type {
 export interface SessionAdb {
   devices(): Promise<AttachedDevice[]>;
   mdnsServices(): Promise<MdnsService[]>;
-  connect(addr: string, timeoutMs?: number): Promise<boolean>;
+  connect(addr: string, timeoutMs?: number): Promise<ConnectResult>;
   disconnect(serial: string): Promise<void>;
   getState(serial: string, timeoutMs?: number): Promise<string | null>;
   getprop(serial: string, key: string): Promise<string>;
@@ -67,6 +67,7 @@ export interface SessionDeps {
 }
 
 const LEGACY_PORT = 5555;
+const CONNECT_FAILED: ConnectResult = { ok: false, error: null };
 
 /**
  * One device session at a time. Every async result is stamped with the generation it was
@@ -85,6 +86,8 @@ export class SessionManager {
   private storage: StorageInfo | null = null;
   private error: string | null = null;
   private reconnectDeadline: number | null = null;
+  /** Why the latest reconnect attempt's `adb connect` failed, shown if reconnecting gives up. */
+  private reconnectError: string | null = null;
   private host: string | null = null;
 
   private starting = false;
@@ -171,7 +174,7 @@ export class SessionManager {
         // Devices put into legacy `adb tcpip 5555` mode don't advertise over mDNS.
         const legacy = `${ip}:${LEGACY_PORT}`;
         // Short timeout: an unreachable host otherwise stalls Start Session for the full TCP timeout.
-        const ok = await this.deps.adb.connect(legacy, 3000).catch(() => false);
+        const { ok } = await this.deps.adb.connect(legacy, 3000).catch(() => CONNECT_FAILED);
         if (gen !== this.gen)
           throw new HttpError(409, 'Start Session was interrupted.', 'CONFLICT');
         if (ok) {
@@ -270,10 +273,11 @@ export class SessionManager {
     try {
       let serial = target.serial;
       if (!serial && target.connectAddr) {
-        const ok = await this.deps.adb.connect(target.connectAddr);
-        if (!ok)
+        const res = await this.deps.adb.connect(target.connectAddr);
+        if (!res.ok)
           throw new Error(
-            `Could not connect to ${target.connectAddr}. Is Wireless debugging still on?`,
+            res.error ??
+              `Could not connect to ${target.connectAddr}. Is Wireless debugging still on?`,
           );
         serial = target.connectAddr;
       }
@@ -422,6 +426,7 @@ export class SessionManager {
     this.clearTimers();
     this.loopEpoch++;
     this.reconnectDeadline = this.now() + this.timing.reconnectWindowMs;
+    this.reconnectError = null;
     this.setState('reconnecting');
     this.queue?.onDeviceLost();
     this.schedule(() => this.giveUp(gen), this.timing.reconnectWindowMs);
@@ -431,8 +436,9 @@ export class SessionManager {
   private async attemptReconnect(gen: number, n: number) {
     const stale = () => gen !== this.gen || this.state !== 'reconnecting';
     if (stale() || !this.device) return;
-    const serial = await this.tryRecover(this.device);
+    const { serial, error } = await this.tryRecover(this.device);
     if (stale()) return;
+    this.reconnectError = error;
     if (serial) {
       this.clearTimers();
       this.device = {
@@ -454,26 +460,38 @@ export class SessionManager {
     );
   }
 
-  /** Returns the serial the device is reachable at now, or null. The port may have changed. */
-  private async tryRecover(device: DeviceInfo): Promise<string | null> {
-    if ((await this.deps.adb.getState(device.serial)) === 'device') return device.serial;
-    if (device.transport !== 'wifi' || !this.host) return null;
+  /**
+   * The serial the device is reachable at now, or null, with the reason a connect failed when
+   * there is one worth showing. The port may have changed.
+   */
+  private async tryRecover(
+    device: DeviceInfo,
+  ): Promise<{ serial: string | null; error: string | null }> {
+    if ((await this.deps.adb.getState(device.serial)) === 'device') {
+      return { serial: device.serial, error: null };
+    }
+    if (device.transport !== 'wifi' || !this.host) return { serial: null, error: null };
     const services = await this.deps.adb.mdnsServices().catch(() => [] as MdnsService[]);
     const svc = services.find((s) => s.kind === 'connect' && s.host === this.host);
     const addrs = svc ? [`${svc.host}:${svc.port}`] : [];
     if (!addrs.includes(device.serial) && splitHostPort(device.serial)) addrs.push(device.serial);
+    let error: string | null = null;
     for (const addr of addrs) {
-      if (!(await this.deps.adb.connect(addr).catch(() => false))) continue;
-      if ((await this.deps.adb.getState(addr)) === 'device') return addr;
+      const res = await this.deps.adb.connect(addr).catch(() => CONNECT_FAILED);
+      if (!res.ok) {
+        error ??= res.error;
+        continue;
+      }
+      if ((await this.deps.adb.getState(addr)) === 'device') return { serial: addr, error: null };
     }
-    return null;
+    return { serial: null, error };
   }
 
   private giveUp(gen: number) {
     if (gen !== this.gen || this.state !== 'reconnecting') return;
     this.clearTimers();
     this.reconnectDeadline = null;
-    this.error = `Lost connection to ${this.device?.model ?? 'the device'}.`;
+    this.error = this.reconnectError ?? `Lost connection to ${this.device?.model ?? 'the device'}.`;
     this.setState('lost');
     this.queue?.onSessionLost();
   }
@@ -485,6 +503,7 @@ export class SessionManager {
     }
     const gen = ++this.gen;
     this.reconnectDeadline = this.now() + this.timing.reconnectWindowMs;
+    this.reconnectError = null;
     this.error = null;
     this.setState('reconnecting');
     this.schedule(() => this.giveUp(gen), this.timing.reconnectWindowMs);

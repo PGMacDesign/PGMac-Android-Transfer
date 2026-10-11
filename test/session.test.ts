@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { SessionManager, type SessionAdb, type SessionQueue } from '../src/server/session.ts';
 import { StateStore } from '../src/server/stateStore.ts';
-import type { AttachedDevice, MdnsService } from '../src/server/adb/parse.ts';
+import {
+  ADB_BLOCKED_ERROR,
+  type AttachedDevice,
+  type ConnectResult,
+  type MdnsService,
+} from '../src/server/adb/parse.ts';
 import { recordingHub } from './helpers.ts';
 
 class FakeAdb implements SessionAdb {
@@ -12,6 +17,8 @@ class FakeAdb implements SessionAdb {
   /** serial -> state; missing means "not found" */
   states = new Map<string, string>();
   connectable = new Set<string>();
+  /** addr -> the reason a failed connect reports */
+  connectErrors = new Map<string, string>();
   connects: string[] = [];
   disconnects: string[] = [];
   async devices() {
@@ -20,11 +27,12 @@ class FakeAdb implements SessionAdb {
   async mdnsServices() {
     return this.services;
   }
-  async connect(addr: string) {
+  async connect(addr: string): Promise<ConnectResult> {
     this.connects.push(addr);
-    if (!this.connectable.has(addr)) return false;
+    if (!this.connectable.has(addr))
+      return { ok: false, error: this.connectErrors.get(addr) ?? null };
     this.states.set(addr, 'device');
-    return true;
+    return { ok: true };
   }
   async disconnect(serial: string) {
     this.disconnects.push(serial);
@@ -326,5 +334,61 @@ describe('SessionManager', () => {
     // One loop polls about 5 times in 5 s; a leaked second loop doubles that.
     expect(batteryCalls).toBeGreaterThanOrEqual(4);
     expect(batteryCalls).toBeLessThanOrEqual(6);
+  });
+
+  describe('when macOS blocks adb from the local network', () => {
+    const addr = '10.0.0.2:5000';
+    const blocked = () => {
+      const t = setup();
+      t.adb.services = [{ instance: 'adb-A', kind: 'connect', host: '10.0.0.2', port: 5000 }];
+      t.adb.connectErrors.set(addr, ADB_BLOCKED_ERROR);
+      return t;
+    };
+
+    it('Start Session fails with the fix instead of the generic message', async () => {
+      const t = blocked();
+      await expect(t.session.start()).rejects.toThrow(ADB_BLOCKED_ERROR);
+      expect(t.session.snapshot()).toMatchObject({ state: 'idle', error: ADB_BLOCKED_ERROR });
+    });
+
+    it('connecting after pairing fails with the fix', async () => {
+      const t = blocked();
+      await expect(t.session.connectAfterPairing('10.0.0.2')).rejects.toThrow(ADB_BLOCKED_ERROR);
+    });
+
+    it('keeps the generic message for a connect failure without a reason', async () => {
+      const t = setup();
+      t.adb.services = [{ instance: 'adb-A', kind: 'connect', host: '10.0.0.2', port: 5000 }];
+      await expect(t.session.start()).rejects.toThrow(/Could not connect to 10\.0\.0\.2:5000/);
+    });
+
+    it('a reconnect that gives up shows the fix, and a later success clears it', async () => {
+      const t = setup();
+      t.adb.services = [{ instance: 'adb-A', kind: 'connect', host: '10.0.0.2', port: 5000 }];
+      t.adb.connectable.add(addr);
+      await t.session.start();
+      t.adb.connectable.delete(addr);
+      t.adb.connectErrors.set(addr, ADB_BLOCKED_ERROR);
+      t.adb.states.delete(addr);
+      await vi.advanceTimersByTimeAsync(5300);
+      expect(t.session.snapshot()).toMatchObject({ state: 'lost', error: ADB_BLOCKED_ERROR });
+
+      t.session.reconnect();
+      expect(t.session.snapshot().error).toBeNull();
+      t.adb.connectable.add(addr);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(t.session.snapshot()).toMatchObject({ state: 'connected', error: null });
+    });
+
+    it('a reconnect that gives up without a reason keeps the lost message', async () => {
+      const t = setup();
+      t.adb.services = [{ instance: 'adb-A', kind: 'connect', host: '10.0.0.2', port: 5000 }];
+      t.adb.connectable.add(addr);
+      await t.session.start();
+      t.adb.connectable.delete(addr);
+      t.adb.states.delete(addr);
+      await vi.advanceTimersByTimeAsync(5300);
+      expect(t.session.snapshot().error).toBe('Lost connection to Pixel 8 Pro.');
+    });
   });
 });
