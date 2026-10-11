@@ -35,6 +35,10 @@ npm start
 
 `npm start` builds the UI, starts the server on `http://127.0.0.1:4848` and opens it in your default browser. Stop it with Ctrl+C or **Quit server** in the menu.
 
+### Desktop app (in development)
+
+`npm run app` builds the UI and opens it in its own window instead of a browser tab. It runs the same server on a free port of its own, so it can run alongside `npm start`, and stops the server when you quit.
+
 ### Connecting a phone
 
 1. On the phone, open **Settings > Developer options > Wireless debugging** and turn it on.

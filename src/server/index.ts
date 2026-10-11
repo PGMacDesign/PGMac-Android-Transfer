@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import open from 'open';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
+import { announceListening, type ParentPortLike } from './readiness.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const config = loadConfig(root);
@@ -30,6 +31,7 @@ try {
   }
   throw err;
 }
+announceListening(config.port, (process as { parentPort?: ParentPortLike }).parentPort);
 
 await app.clearStaleStaging();
 
