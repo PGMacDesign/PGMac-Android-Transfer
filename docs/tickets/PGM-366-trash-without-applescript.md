@@ -46,6 +46,10 @@ On macOS versions without `/usr/bin/trash` (before macOS 15), the desktop app mo
 
 - Changing the browser-mode delete path. Entitlements (the signed-release tickets).
 
+## Review notes
+
+Settled after a review dispute: the injected function replaces only a missing `/usr/bin/trash` (`ENOENT` from the access check or the spawn). When the CLI is present and fails, its error goes to the existing handling (including `NO_TRASH`); it is not retried through the injected function. Findings asking for that retry are out of scope.
+
 ## Size
 
 M: an injectable trash step and one request/reply message pair.
