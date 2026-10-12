@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, globSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import type { Configuration } from 'electron-builder';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import config from '../electron-builder.config.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -257,6 +258,7 @@ describe('packaging config', () => {
     expect(config.directories?.output).toBe('release');
     expect(config.mac?.target).toEqual([{ target: 'dmg', arch: ['universal'] }]);
     expect(config.mac?.identity).toBeNull();
+    expect(config.mac?.notarize).toBe(false);
     expect(config.mac?.icon).toBe('build/icon.png');
   });
 
@@ -297,5 +299,100 @@ describe('packaging config', () => {
     // The two service types adb advertises for wireless debugging, and no others: a missing one
     // stays invisible to discovery even after the user allows Local Network access.
     expect(info.NSBonjourServices).toEqual(['_adb-tls-connect._tcp', '_adb-tls-pairing._tcp']);
+  });
+});
+
+const signingEnv = [
+  'PGMAC_SIGN',
+  'APPLE_KEYCHAIN_PROFILE',
+  'APPLE_API_KEY',
+  'APPLE_API_KEY_ID',
+  'APPLE_API_ISSUER',
+];
+const entitlements = 'build/entitlements.mac.plist';
+const credentialsError =
+  'Set APPLE_KEYCHAIN_PROFILE, or APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER, to notarize.';
+
+// The config reads the environment when it loads, so each case loads a fresh copy.
+async function loadConfig(env: Record<string, string>): Promise<Configuration> {
+  for (const [key, value] of Object.entries(env)) process.env[key] = value;
+  vi.resetModules();
+  return (await import('../electron-builder.config.ts')).default;
+}
+
+describe('signing config', () => {
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = Object.fromEntries(signingEnv.map((k) => [k, process.env[k]]));
+    for (const key of signingEnv) delete process.env[key];
+  });
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it('stays unsigned and skips notarization without PGMAC_SIGN', async () => {
+    const mac = (await loadConfig({})).mac;
+    expect(mac?.identity).toBeNull();
+    expect(mac?.notarize).toBe(false);
+    expect(mac?.hardenedRuntime).toBeUndefined();
+    expect(mac?.entitlements).toBeUndefined();
+    expect(mac?.entitlementsInherit).toBeUndefined();
+  });
+
+  it('stays unsigned when PGMAC_SIGN is anything but 1, even with credentials', async () => {
+    const mac = (await loadConfig({ PGMAC_SIGN: '', APPLE_KEYCHAIN_PROFILE: 'pgmac-notary' })).mac;
+    expect(mac?.identity).toBeNull();
+    expect(mac?.notarize).toBe(false);
+  });
+
+  it('signs, hardens and notarizes with PGMAC_SIGN=1 and a keychain profile', async () => {
+    const loaded = await loadConfig({ PGMAC_SIGN: '1', APPLE_KEYCHAIN_PROFILE: 'pgmac-notary' });
+    expect(loaded.mac).toMatchObject({
+      identity: 'PGMacDesign Inc (YMQXY9Z658)',
+      hardenedRuntime: true,
+      entitlements,
+      entitlementsInherit: entitlements,
+      notarize: true,
+    });
+    // Signing changes nothing else about the build.
+    expect(loaded.mac?.target).toEqual(config.mac?.target);
+    expect(loaded.mac?.extendInfo).toEqual(config.mac?.extendInfo);
+    expect(loaded.electronFuses).toEqual(config.electronFuses);
+    expect(loaded.files).toEqual(config.files);
+  });
+
+  it('accepts an App Store Connect API key instead of a keychain profile', async () => {
+    const mac = (
+      await loadConfig({
+        PGMAC_SIGN: '1',
+        APPLE_API_KEY: '/tmp/AuthKey_TEST.p8',
+        APPLE_API_KEY_ID: 'TESTKEYID',
+        APPLE_API_ISSUER: '00000000-0000-0000-0000-000000000000',
+      })
+    ).mac;
+    expect(mac?.identity).toBe('PGMacDesign Inc (YMQXY9Z658)');
+    expect(mac?.notarize).toBe(true);
+  });
+
+  it('refuses to load with PGMAC_SIGN=1 and no notarization credentials', async () => {
+    await expect(loadConfig({ PGMAC_SIGN: '1' })).rejects.toThrow(credentialsError);
+  });
+
+  it('refuses an incomplete API key set', async () => {
+    await expect(
+      loadConfig({ PGMAC_SIGN: '1', APPLE_API_KEY: '/tmp/AuthKey_TEST.p8', APPLE_API_KEY_ID: 'X' }),
+    ).rejects.toThrow(credentialsError);
+  });
+
+  it('grants only JIT, the one entitlement Electron needs under the hardened runtime', () => {
+    // The plist parser electron-builder itself uses.
+    const plist = createRequire(path.join(root, 'node_modules/app-builder-lib/package.json'))(
+      'plist',
+    ) as { parse(xml: string): unknown };
+    const parsed = plist.parse(readFileSync(path.join(root, entitlements), 'utf8'));
+    expect(parsed).toEqual({ 'com.apple.security.cs.allow-jit': true });
   });
 });
