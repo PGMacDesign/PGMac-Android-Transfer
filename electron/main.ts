@@ -28,7 +28,7 @@ import {
 } from './lib.ts';
 import { resolveApiToken } from '../src/server/token.ts';
 import { dragOutHandler, fallbackDragIcon } from './dragOut.ts';
-import { isExternalUrl } from './links.ts';
+import { isExternalUrl, navigationDecision } from './links.ts';
 import { appLogsDir, FileLog, redactedLines } from './log.ts';
 import { appMenuTemplate } from './menu.ts';
 import { QuitController, quitPrompt, QUIT_BUTTON } from './quit.ts';
@@ -64,6 +64,8 @@ let serverRunning = false;
 // What the window shows: the server's page, or a failure page once there is no server. Kept so
 // a window reopened from the Dock shows the same thing.
 let pageUrl: string | null = null;
+// The server's origin, the only one the window may navigate to. Null until it is listening.
+let appOrigin: string | null = null;
 
 const quitter = new QuitController({
   server: () => {
@@ -123,6 +125,14 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isExternalUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
+  });
+  // Links, form posts and script redirects that would replace the app in its own window. Loads
+  // started from main (loadURL) don't fire this, so the failure page still shows.
+  win.webContents.on('will-navigate', (event) => {
+    const decision = navigationDecision(event.url, appOrigin);
+    if (decision === 'allow') return;
+    event.preventDefault();
+    if (decision === 'external') void shell.openExternal(event.url);
   });
 
   let saveTimer: NodeJS.Timeout | undefined;
@@ -210,7 +220,9 @@ async function startServer(): Promise<void> {
     if (listening || !isListeningMessage(message, port)) return;
     listening = true;
     log.write('main', `Server listening on ${SERVER_HOST}:${port}`);
-    showPage(windowUrl(port, token));
+    const url = windowUrl(port, token);
+    appOrigin = new URL(url).origin;
+    showPage(url);
   });
 
   child.once('exit', (code) => {

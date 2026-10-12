@@ -260,6 +260,23 @@ describe('packaging config', () => {
     expect(config.mac?.icon).toBe('build/icon.png');
   });
 
+  it('flips the fuses that stop other programs running code as the app', () => {
+    // Exactly these: every fuse not listed, cookie encryption included, keeps Electron's default.
+    // The arm64 binary is re-signed ad hoc after its fuses change because an unsigned build
+    // (mac.identity null) is never signed afterwards, and Apple Silicon won't launch it otherwise.
+    expect(config.electronFuses).toEqual({
+      runAsNode: false,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false,
+      grantFileProtocolExtraPrivileges: false,
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      resetAdHocDarwinSignature: true,
+    });
+    // Integrity validation and asar-only loading protect nothing without an app.asar.
+    expect(config.asar).toBe(true);
+  });
+
   it('declares Local Network, Bonjour and folder usage in Info.plist', () => {
     const info = config.mac?.extendInfo as Record<string, unknown>;
     expect(info).toEqual({
