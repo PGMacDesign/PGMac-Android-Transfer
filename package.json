@@ -22,7 +22,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:emulator": "PGMAC_EMULATOR_TEST=1 vitest run test/integration",
-    "make": "vite build && electron-builder --mac --config electron-builder.config.ts"
+    "make": "vite build && electron-builder --mac --config electron-builder.config.ts",
+    "make:signed": "PGMAC_SIGN=1 npm run make"
   },
   "dependencies": {
     "@fastify/static": "^10.1.5",

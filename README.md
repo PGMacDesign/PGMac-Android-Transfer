@@ -55,7 +55,28 @@ npm run make
 
 This builds the UI and packages it, with the server and its production dependencies, into a universal (Apple silicon and Intel) app. The DMG lands in `release/`, named `PGMac Android Transfer-<version>-universal.dmg`. Open it and drag the app to Applications. It needs macOS to build.
 
-The app is unsigned for now, so macOS won't open it with a double-click the first time. Right-click it in Applications and choose **Open**, then **Open** again in the dialog (on recent macOS versions you may instead need **Open Anyway** under **System Settings > Privacy & Security**). Later launches open normally.
+`npm run make` builds an unsigned app, so macOS won't open it with a double-click the first time. Right-click it in Applications and choose **Open**, then **Open** again in the dialog (on recent macOS versions you may instead need **Open Anyway** under **System Settings > Privacy & Security**). Later launches open normally.
+
+#### Signed builds
+
+```sh
+npm run make:signed
+```
+
+This signs the app with the Developer ID certificate, enables the hardened runtime, notarizes it with Apple and staples the ticket, so it opens with a double-click on any Mac. The certificate comes from the login keychain, or from `CSC_LINK` and `CSC_KEY_PASSWORD`. Notarization needs one of these credential sets in the environment, and the build stops before packaging without one:
+
+- `APPLE_KEYCHAIN_PROFILE`: the name of a profile stored with `xcrun notarytool store-credentials`.
+- `APPLE_API_KEY` (path to the `.p8` key file), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`: an App Store Connect API key.
+
+Check the result:
+
+```sh
+codesign --verify --deep --strict --verbose=2 <app>
+spctl --assess --type execute -vv <app>
+xcrun stapler validate <app>
+```
+
+`<app>` is `release/mac-universal/PGMac Android Transfer.app`.
 
 ### Connecting a phone
 

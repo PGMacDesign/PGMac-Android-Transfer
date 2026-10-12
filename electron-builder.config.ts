@@ -2,12 +2,46 @@
 // prebuilt UI ship as-is, so there is no bundling step for Forge's plugin pipeline to drive;
 // what's needed is a declarative file allowlist, devDependency pruning, a universal macOS
 // build and a DMG, all of which electron-builder does from this one file. It wraps
-// @electron/osx-sign and @electron/notarize, so signing and notarization are later config
-// additions (mac.identity, mac.notarize), not a tool change.
+// @electron/osx-sign and @electron/notarize, so signing and notarization are config
+// (mac.identity, mac.notarize), not a separate tool.
 //
 // The universal build works because every production dependency is pure JavaScript: the arm64
 // and x64 app.asar files are identical, so they merge without per-arch exceptions.
 import type { Configuration } from 'electron-builder';
+
+// `npm run make` stays unsigned so a local build needs no certificate or Apple account;
+// `npm run make:signed` sets PGMAC_SIGN. The identity comes from the login keychain locally, or
+// from CSC_LINK and CSC_KEY_PASSWORD, which electron-builder imports in CI.
+const signed = process.env.PGMAC_SIGN === '1';
+
+// electron-builder skips notarization with only a warning when it finds no credentials, which
+// would leave a signed app that Gatekeeper still blocks. Fail before packaging instead.
+if (
+  signed &&
+  !process.env.APPLE_KEYCHAIN_PROFILE &&
+  !(process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER)
+) {
+  throw new Error(
+    'Set APPLE_KEYCHAIN_PROFILE, or APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER, to notarize.',
+  );
+}
+
+// Electron's V8 needs JIT under the hardened runtime, and that's all: the app isn't sandboxed,
+// so spawning adb and dns-sd and opening network connections need no entitlement. Helpers get
+// the same file, as they run the same engine.
+const signing: Configuration['mac'] = signed
+  ? {
+      identity: 'PGMacDesign Inc (YMQXY9Z658)',
+      hardenedRuntime: true,
+      entitlements: 'build/entitlements.mac.plist',
+      entitlementsInherit: 'build/entitlements.mac.plist',
+      notarize: true,
+    }
+  : {
+      // Don't pick up whatever identity is in the keychain.
+      identity: null,
+      notarize: false,
+    };
 
 const config: Configuration = {
   appId: 'com.pgmacdesign.androidtransfer',
@@ -57,7 +91,7 @@ const config: Configuration = {
     onlyLoadAppFromAsar: true,
     // Flipping fuses edits the binary and breaks its ad-hoc signature, and Apple Silicon kills an
     // arm64 binary whose signature doesn't match. With mac.identity null nothing re-signs the app
-    // afterwards, so it is ad-hoc signed again here; a real identity signs over it.
+    // afterwards, so it is ad-hoc signed again here; a signed build's identity signs over it.
     resetAdHocDarwinSignature: true,
   },
   mac: {
@@ -65,8 +99,7 @@ const config: Configuration = {
     // A 1024x1024 PNG; electron-builder converts it to .icns at build time.
     icon: 'build/icon.png',
     target: [{ target: 'dmg', arch: ['universal'] }],
-    // Unsigned until the signing work: don't pick up whatever identity is in the keychain.
-    identity: null,
+    ...signing,
     // Without these, macOS denies Local Network access instead of prompting, and Bonjour
     // discovery (adb's own mDNS and the dns-sd fallback, both started by the app) sees nothing.
     // Folder and volume strings are what the TCC prompts show when the local pane reads them.
