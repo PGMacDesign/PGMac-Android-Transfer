@@ -59,6 +59,8 @@ A GitHub Actions workflow builds the signed, notarized DMG from a `v*` tag, wait
 
 Settled after a review dispute: electron-builder is the signer, so the `make:signed` step's process tree sees `CSC_LINK`, `CSC_KEY_PASSWORD` and the API key. That is accepted for this ticket. It is reduced by `npm ci` from the lockfile, the `release` environment's required approval, and the supply-chain work in PGM-374. Moving signing and notarization out of the npm toolchain (Apple's `codesign` and `notarytool` in separate steps) is a possible later hardening and out of scope here; findings asking for it are not blocking. `npm ci` and the test steps must still run without any secret in their environment.
 
+Also settled: `npm run make:signed -- -- --publish never` is correct. `make:signed` runs `npm run make`, so the flag needs one `--` per npm level; a single `--` delivers only `never`. Verified with npm 11. Findings asking for a single `--` are wrong.
+
 ## Size
 
 M: one workflow file and a YAML structure test.
