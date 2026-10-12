@@ -78,6 +78,30 @@ xcrun stapler validate <app>
 
 `<app>` is `release/mac-universal/PGMac Android Transfer.app`.
 
+#### Releasing
+
+The Release workflow (`.github/workflows/release.yml`) builds the signed, notarized DMG on a macOS runner and attaches it to the tag's GitHub Release, with its SHA-256 in the release notes.
+
+1. Set `version` in `package.json` and merge it to `main`.
+2. Tag that commit with the same version and push the tag:
+
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+3. Approve the run when GitHub asks for a review of the `release` environment. Until then the job hasn't started and can't read any signing secret.
+
+Nothing else starts it, apart from **Run workflow** on the Actions tab. A manual run builds the DMG and keeps it as a workflow artifact; it publishes to the Release only when **publish** is checked and the run is started from a `v*` tag.
+
+The `release` environment holds these secrets:
+
+- `MAC_CERT_P12_BASE64`
+- `MAC_CERT_PASSWORD`
+- `APPLE_API_KEY_P8`
+- `APPLE_API_KEY_ID`
+- `APPLE_API_ISSUER`
+
 ### Connecting a phone
 
 1. On the phone, open **Settings > Developer options > Wireless debugging** and turn it on.
