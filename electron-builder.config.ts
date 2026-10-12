@@ -43,6 +43,23 @@ const config: Configuration = {
     '!**/node_modules/**/*.d.{ts,mts,cts}',
   ],
   asar: true,
+  // Flipped in the Electron binary at package time. With the defaults, anyone could run
+  // `ELECTRON_RUN_AS_NODE=1 <app binary> script.js`, or pass NODE_OPTIONS or --inspect, and run
+  // their own code as this app, inheriting its signature and the Local Network and folder access
+  // the user granted it. The server runs in a utilityProcess, which doesn't need runAsNode. The
+  // asar pair makes the app load only app.asar and refuse one whose contents changed.
+  electronFuses: {
+    runAsNode: false,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    grantFileProtocolExtraPrivileges: false,
+    enableEmbeddedAsarIntegrityValidation: true,
+    onlyLoadAppFromAsar: true,
+    // Flipping fuses edits the binary and breaks its ad-hoc signature, and Apple Silicon kills an
+    // arm64 binary whose signature doesn't match. With mac.identity null nothing re-signs the app
+    // afterwards, so it is ad-hoc signed again here; a real identity signs over it.
+    resetAdHocDarwinSignature: true,
+  },
   mac: {
     category: 'public.app-category.utilities',
     // A 1024x1024 PNG; electron-builder converts it to .icns at build time.
