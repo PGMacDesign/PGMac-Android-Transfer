@@ -1,0 +1,166 @@
+# Builds the signed, notarized DMG and attaches it to the tag's GitHub Release.
+#
+# Only two things start it: pushing a v* tag, or a manual dispatch by someone with write access.
+# Merging this file or any pull request starts nothing. The job also waits for approval of the
+# `release` environment before it can read a signing secret.
+#
+# Never add `pull_request_target` or `workflow_run`. Both run in the base repository's context
+# with its secrets and a write token, but can be set off by a fork's pull request, and a job that
+# builds with `npm ci` runs whatever code and dependencies that pull request brings. The
+# environment approval would then be the only thing between a stranger's code and the Developer
+# ID certificate. Plain `pull_request`, schedules and branch pushes are left out too, so a release
+# always starts from a deliberate act.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Attach the DMG to the GitHub Release for the selected tag
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-latest
+    environment: release
+    timeout-minutes: 60
+    # Write access is for `gh release`; nothing else in the job pushes.
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The npm toolchain runs in this job, so the write token stays out of .git/config.
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Write the App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          umask 077
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Build, sign and notarize
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          # electron-builder decodes the certificate and creates its signing keychain under this
+          # directory, so the cleanup step knows where to find them.
+          APP_BUILDER_TMP_DIR: ${{ runner.temp }}
+        # make:signed runs `npm run make`, so each npm level needs its own `--` to pass the flag
+        # on. Publishing is left to the gh step below, which holds the only token.
+        run: npm run make:signed -- -- --publish never
+
+      - name: Verify the signature, Gatekeeper and the stapled ticket
+        run: |
+          app="release/mac-universal/PGMac Android Transfer.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute -vv "$app"
+          xcrun stapler validate "$app"
+
+      - name: Compute the DMG's SHA-256
+        id: dmg
+        run: |
+          shopt -s nullglob
+          dmgs=(release/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then
+            echo "::error::Expected one DMG in release/, found ${#dmgs[@]}"
+            exit 1
+          fi
+          dmg="${dmgs[0]}"
+          sha256="$(shasum -a 256 "$dmg" | cut -d ' ' -f 1)"
+          echo "SHA-256 ($(basename "$dmg")): $sha256"
+          {
+            echo "path=$dmg"
+            echo "name=$(basename "$dmg")"
+            echo "sha256=$sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the DMG as an artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.dmg.outputs.name }}
+          path: ${{ steps.dmg.outputs.path }}
+          if-no-files-found: error
+
+      - name: Publish to the GitHub Release
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DMG: ${{ steps.dmg.outputs.path }}
+          SHA256: ${{ steps.dmg.outputs.sha256 }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            echo "::error::Publishing needs a tag. Run the workflow from a v* tag, not a branch."
+            exit 1
+          fi
+          tag="$GITHUB_REF_NAME"
+          # The DMG's name carries package.json's version, so a tag that disagrees would publish
+          # a build labelled as some other release.
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::Tag $tag doesn't match package.json version $version"
+            exit 1
+          fi
+          line="SHA-256 ($(basename "$DMG")): $SHA256"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$DMG" --clobber
+            # Keep the owner's notes and replace only the checksum line from an earlier upload.
+            body="$(gh release view "$tag" --json body -q .body)"
+            kept="$(printf '%s\n' "$body" | grep -v '^SHA-256 (' || true)"
+            if [ -n "$kept" ]; then
+              printf '%s\n\n%s\n' "$kept" "$line" > "$RUNNER_TEMP/notes.md"
+            else
+              printf '%s\n' "$line" > "$RUNNER_TEMP/notes.md"
+            fi
+            gh release edit "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$tag" --verify-tag --title "$tag" --notes "$line"
+            gh release upload "$tag" "$DMG" --clobber
+          fi
+
+      # Hosted runners are discarded after the job, but the key, the decoded certificate and the
+      # keychain holding it shouldn't outlive the job on any runner, failed or cancelled runs
+      # included.
+      - name: Remove the API key and signing keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          shopt -s nullglob
+          for keychain in "$RUNNER_TEMP"/*.keychain "$RUNNER_TEMP"/*.keychain-db; do
+            security delete-keychain "$keychain" || rm -f "$keychain"
+          done
+          rm -rf "$RUNNER_TEMP"/t-*
