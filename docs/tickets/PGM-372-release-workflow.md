@@ -55,6 +55,10 @@ A GitHub Actions workflow builds the signed, notarized DMG from a `v*` tag, wait
 
 - Repo rulesets and Actions settings (owner, PGM-371). Auto-update metadata (PGM-373). Running the workflow.
 
+## Review notes
+
+Settled after a review dispute: electron-builder is the signer, so the `make:signed` step's process tree sees `CSC_LINK`, `CSC_KEY_PASSWORD` and the API key. That is accepted for this ticket. It is reduced by `npm ci` from the lockfile, the `release` environment's required approval, and the supply-chain work in PGM-374. Moving signing and notarization out of the npm toolchain (Apple's `codesign` and `notarytool` in separate steps) is a possible later hardening and out of scope here; findings asking for it are not blocking. `npm ci` and the test steps must still run without any secret in their environment.
+
 ## Size
 
 M: one workflow file and a YAML structure test.
