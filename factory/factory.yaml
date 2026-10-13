@@ -36,16 +36,33 @@ builder:
   configDir: ~/factory-data/claude-builder
 
 reviewers:
-  required: [codex, cubic]
+  required: [codex]
+  backup: [agent:muse]
   shadow: [coderabbit]
   codex:
     bin: /opt/homebrew/bin/codex
-    model: gpt-6-sol
+    model: gpt-6-astra
   coderabbit:
     bin: ~/.local/bin/coderabbit
-  cubic:
-    bin: ~/.cubic/bin/cubic
-    # Shared key file, outside every repo.
-    envFile: ~/factory-data/secrets/cubic.env
-    # A cubic finding whose own text retracts it ("No issues found.") is recorded as low, not blocking.
-    ignoreSelfRetracting: true
+  # Muse gates as a backup: its completed review blocks like Codex's, and when it
+  # is rate limited or fails it is skipped and Codex decides alone.
+  agents:
+    muse:
+      bin: ~/.local/bin/muse
+      # Contributor mode off: Meta never trains on the reviewed code. --disable-write
+      # blocks file edits; shell commands (tests) still run in the agent's sandbox.
+      args:
+        [
+          exec,
+          --model,
+          muse-wonder-1.0,
+          --contributor-mode,
+          'off',
+          --disable-approval,
+          --disable-write,
+          --user-input-auto-resolve,
+          --prompt-file,
+          '{promptFile}',
+        ]
+      skill: pat-pr-review
+      timeoutMs: 1200000
