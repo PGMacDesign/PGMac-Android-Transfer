@@ -60,6 +60,7 @@ reviewers:
           'off',
           --disable-approval,
           --disable-write,
+          --trust-workspace,
           --user-input-auto-resolve,
           --prompt-file,
           '{promptFile}',
