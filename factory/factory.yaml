@@ -19,6 +19,7 @@ repos:
     requiredCheck: check
     authorEmail: pgmacdesign@gmail.com
     reviewRulesFile: docs/review-rules.md
+    reviewTier: medium
     # Appended to the factory's generic review rules. At most 5 rules of 300 characters.
     reviewRules:
       - Breaking a rule in the "Architecture rules" section of AGENTS.md, or a law under "Invariants" in docs/DESIGN.md, is at least P1; cite the rule or the component and number. A changed invariant without a test on the violating path is P2.
