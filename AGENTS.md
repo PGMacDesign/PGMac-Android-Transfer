@@ -25,7 +25,7 @@ PGMac Android Transfer moves files between a Mac and an Android device over adb 
 ## Architecture rules
 
 1. **The laws in `docs/DESIGN.md` under "Invariants" hold.** Transfer job lifecycle, destination naming, device session, pairing, client sync, Finder uploads and staging, job eligibility, volume health and reveal. A change that touches one of those state machines keeps every law and adds a test for any law it changes, including the violating path.
-2. **Browser mode keeps working.** Every ticket leaves `npm start` behaving as before unless the ticket says otherwise. Desktop-only behaviour is chosen at runtime (for example, a preload bridge being present), never by breaking the browser path.
+2. **Every launch path keeps working.** Browser mode (`npm start`), dev mode (`npm run dev`, across `--watch` restarts) and the desktop app (`npm run app`, and the packaged app opened from the Dock, which gets launchd's minimal `PATH` and no shell environment) behave as before unless the ticket says otherwise. Desktop-only behaviour is chosen at runtime (for example, a preload bridge being present), never by breaking another path, and needs no counterpart in the other modes. A shared requirement that one path adds (a token the server checks, a header, an environment variable the server needs) reaches every path in the same change; a ticket that defers another path's hand-off conflicts with this rule (see Tickets).
 3. **The server binds to `127.0.0.1` only, and the `onRequest` Host/Origin check in `src/server/app.ts` stays.** It returns 403 for a forged `Host` or a foreign `Origin`. New checks (such as a token) are added after it, never instead of it.
 4. **Child processes take argv arrays.** Never run a local shell (`exec`, `shell: true`, string commands). Commands that run on the device go through `Adb.shell()` with its quoting. User-supplied paths are validated (absolute, no NUL bytes).
 5. **Never run `adb kill-server`.** Other tools may share the adb server daemon.
@@ -60,3 +60,7 @@ Unless the ticket explicitly says so:
 ## Tickets
 
 Each ticket names its sanctioned edits. If a change outside them is needed, explain why in your summary. A ticket's "Owner manual check" section lists GUI checks the owner runs after merge (a Dock launch, a drag to the Desktop); you can't run them, so cover the same behaviour with unit tests where the ticket asks and leave the rest. If the acceptance criteria conflict with a rule here, stop and ask for a decision rather than picking one.
+
+## Review rules
+
+Reviewers: apply the rules in `docs/review-rules.md`.
