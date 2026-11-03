@@ -2,7 +2,7 @@
 #   pnpm --dir ~/_Development/_AIWorkspace/pgmac-factory factory <command> --config <abs path to this file>
 # Its own data dir, ticket queue, worktrees, logs, run lock and pause flag. The builder
 # login and the reviewer keys are shared with other instances, which may run at the
-# same time; they share the Claude, Codex and cubic usage limits.
+# same time; they share the Claude and Codex usage limits.
 # Setup and operation: ~/_Development/_AIWorkspace/pgmac-factory/docs/new-project.md
 dataDir: ~/factory-data-pgmac-transfer
 # The ticket queue is this instance's own Beads database, <dataDir>/beads (prefix pat).
@@ -38,33 +38,6 @@ builder:
 
 reviewers:
   required: [codex]
-  backup: [agent:muse]
-  shadow: [coderabbit]
   codex:
     bin: /opt/homebrew/bin/codex
     model: gpt-6-astra
-  coderabbit:
-    bin: ~/.local/bin/coderabbit
-  # Muse gates as a backup: its completed review blocks like Codex's, and when it
-  # is rate limited or fails it is skipped and Codex decides alone.
-  agents:
-    muse:
-      bin: ~/.local/bin/muse
-      # Contributor mode off: Meta never trains on the reviewed code. --disable-write
-      # blocks file edits; shell commands (tests) still run in the agent's sandbox.
-      args:
-        [
-          exec,
-          --model,
-          muse-wonder-1.0,
-          --contributor-mode,
-          'off',
-          --disable-approval,
-          --disable-write,
-          --trust-workspace,
-          --user-input-auto-resolve,
-          --prompt-file,
-          '{promptFile}',
-        ]
-      skill: pat-pr-review
-      timeoutMs: 1200000
